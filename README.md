@@ -7,7 +7,8 @@ Baremetal (`no_std`) Rust firmware for a **Seeed Studio XIAO ESP32-C6** driving 
 > Status: **Feature-complete (builds)** — the full firmware (mmWave sensor → Matter Occupancy
 > Sensor over Thread, with flash-backed fabric persistence and a BOOT-pin factory reset) compiles
 > for the RISC-V target. On-hardware bring-up (flashing, sensor validation, Google Home
-> commissioning) is the user's step — see [Verification](#verification). See [Roadmap](#roadmap).
+> commissioning) is the user's step — see [Verification](#verification) and the step-by-step
+> [`CLAUDE.md`](CLAUDE.md) bring-up guide. See [Roadmap](#roadmap).
 
 ## Hardware
 
