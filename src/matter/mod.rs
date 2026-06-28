@@ -12,9 +12,18 @@
 
 pub mod occupancy;
 
+use core::borrow::BorrowMut;
 use core::pin::pin;
 
-use esp_hal::peripherals::{ADC1, BT, IEEE802154, RNG};
+use embassy_embedded_hal::adapter::BlockingAsync;
+use embassy_futures::select::{select, Either};
+use esp_bootloader_esp_idf::partitions::{
+    read_partition_table, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
+};
+use esp_hal::gpio::{Input, InputConfig, Pull};
+use esp_hal::peripherals::{ADC1, BT, FLASH, GPIO9, IEEE802154, RNG};
+use esp_storage::FlashStorage;
+use log::{info, warn};
 
 use rs_matter_embassy::matter::crypto::{default_crypto, Crypto, RngCore};
 use rs_matter_embassy::matter::dm::clusters::basic_info::BasicInfoConfig;
@@ -25,9 +34,12 @@ use rs_matter_embassy::matter::dm::devices::test::{
 use rs_matter_embassy::matter::dm::{
     Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
 };
-use rs_matter_embassy::matter::persist::DummyKvBlobStore;
+use rs_matter_embassy::matter::error::Error;
+use rs_matter_embassy::matter::persist::KvBlobStore;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
+use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
+use rs_matter_embassy::persist::SeqMapKvBlobStore;
 use rs_matter_embassy::stack::rand::reseeding_csprng;
 use rs_matter_embassy::wireless::esp::EspThreadDriver;
 use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
@@ -42,6 +54,9 @@ const BUMP_SIZE: usize = 25000;
 
 /// Endpoint 0 hosts the hidden system clusters, so the sensor lives on EP 1.
 const OCC_ENDPOINT_ID: u16 = 1;
+
+/// Seconds the BOOT pin (GPIO9) must be held low to factory-reset the fabric.
+const RESET_SECS: u64 = 3;
 
 /// Allocates a `'static`, zeroed `$t` from a `StaticCell` (avoids blowing the
 /// program stack with the ~35-50KB Matter stack).
@@ -76,9 +91,17 @@ const NODE: Node = Node {
     ],
 };
 
-/// Brings up Matter-over-Thread and runs it forever. Consumes the radios and
-/// the RNG/ADC1 used to seed the crypto CSPRNG.
-pub async fn run(ieee802154: IEEE802154<'static>, bt: BT<'static>, rng: RNG<'static>, adc1: ADC1<'static>) -> ! {
+/// Brings up Matter-over-Thread and runs it forever. Consumes the radios, the
+/// RNG/ADC1 used to seed the crypto CSPRNG, the flash (for fabric persistence),
+/// and the BOOT pin (GPIO9, used for factory reset).
+pub async fn run(
+    ieee802154: IEEE802154<'static>,
+    bt: BT<'static>,
+    rng: RNG<'static>,
+    adc1: ADC1<'static>,
+    flash: FLASH<'static>,
+    boot_pin: GPIO9<'static>,
+) -> ! {
     // Seed a reseeding CSPRNG from the hardware TRNG; the source guard must
     // outlive every use of the RNG, so keep it bound for the whole function.
     let _trng_source = esp_hal::rng::TrngSource::new(rng, adc1);
@@ -123,27 +146,92 @@ pub async fn run(ieee802154: IEEE802154<'static>, bt: BT<'static>, rng: RNG<'sta
             Async(desc::DescHandler::new(Dataver::new_rand(&mut weak_rand)).adapt()),
         );
 
-    // Non-persistent KV store (fabric does not survive reboot yet — that's M3).
-    let mut store = DummyKvBlobStore;
+    // Flash-backed KV store: fabric/ACL state persists across reboots so the
+    // device does not need re-commissioning. Requires an NVS partition (see
+    // partitions.csv).
+    let mut pt_buf = [0u8; PARTITION_TABLE_MAX_LEN];
+    let mut store = persistent_store(flash, &mut pt_buf[..]);
     stack.startup(&crypto, &mut store).await.unwrap();
     let kv = stack.matter().kv(store);
 
-    let matter = pin!(stack.run(
-        EmbassyThread::new(
-            EspThreadDriver::new(ieee802154, bt),
-            crypto.rand().unwrap(),
-            ieee_eui64,
-            &kv,
-            stack,
-            true, // randomize the BLE address
-        ),
-        &crypto,
-        (NODE, handler),
-        &kv,
-        (),
-    ));
+    if stack.is_commissioned() {
+        info!(
+            "Already commissioned. To factory-reset, hold BOOT (GPIO9) low for {RESET_SECS}+ seconds."
+        );
+    }
 
-    matter.await.unwrap();
-    // `stack.run` only returns on a fatal error; surface it as a panic above.
-    unreachable!("matter stack exited")
+    {
+        // Run Matter; concurrently watch the BOOT pin for a factory-reset request.
+        let mut matter = pin!(stack.run(
+            EmbassyThread::new(
+                EspThreadDriver::new(ieee802154, bt),
+                crypto.rand().unwrap(),
+                ieee_eui64,
+                &kv,
+                stack,
+                true, // randomize the BLE address
+            ),
+            &crypto,
+            (NODE, handler),
+            &kv,
+            (),
+        ));
+        let mut wait_reset = pin!(wait_factory_reset(Input::new(
+            boot_pin,
+            InputConfig::default().with_pull(Pull::Down)
+        )));
+        select(&mut matter, &mut wait_reset).coalesce().await.unwrap();
+    }
+
+    // Reached only when the user requested a factory reset.
+    warn!("Factory reset: clearing Matter fabric storage");
+    stack.matter().reset_persist(kv).await.unwrap();
+    warn!("Rebooting...");
+    esp_hal::system::software_reset()
+}
+
+/// Returns a flash-backed [`KvBlobStore`] persisting to the first NVS partition
+/// in the chip's partition table. Panics if no NVS partition exists — provide
+/// one via `partitions.csv`.
+fn persistent_store<'d>(
+    flash: FLASH<'d>,
+    mut buf: impl BorrowMut<[u8]>,
+) -> impl KvBlobStore + 'd {
+    let mut flash = FlashStorage::new(flash);
+    let pt_buf = &mut buf.borrow_mut()[..PARTITION_TABLE_MAX_LEN];
+    let pt = read_partition_table(&mut flash, pt_buf).unwrap();
+    let nvs = pt
+        .find_partition(PartitionType::Data(DataPartitionSubType::Nvs))
+        .unwrap()
+        .expect("no NVS partition found — see partitions.csv");
+
+    let range = nvs.offset()..nvs.offset() + nvs.len();
+    info!(
+        "Persisting Matter state to NVS partition \"{}\" at {:#x}..{:#x}",
+        nvs.label_as_str(),
+        range.start,
+        range.end
+    );
+    SeqMapKvBlobStore::new(BlockingAsync::new(flash), range)
+}
+
+/// Resolves once the BOOT pin (GPIO9) has been held low for [`RESET_SECS`].
+async fn wait_factory_reset(mut pin: Input<'_>) -> Result<(), Error> {
+    loop {
+        pin.wait_for_low().await;
+        embassy_time::Timer::after_millis(50).await; // debounce
+        if pin.is_low() {
+            warn!("BOOT held low — keep holding {RESET_SECS}s to factory-reset");
+            if matches!(
+                select(
+                    pin.wait_for_high(),
+                    embassy_time::Timer::after_secs(RESET_SECS),
+                )
+                .await,
+                Either::Second(())
+            ) {
+                return Ok(());
+            }
+        }
+    }
 }

@@ -71,12 +71,15 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     spawner.spawn(sensor::sensor_task(sensor_uart).expect("failed to create sensor task"));
 
-    // Run Matter-over-Thread forever (consumes the radios + RNG/ADC1).
+    // Run Matter-over-Thread forever (consumes the radios, RNG/ADC1, flash for
+    // fabric persistence, and the BOOT pin for factory reset).
     matter::run(
         peripherals.IEEE802154,
         peripherals.BT,
         peripherals.RNG,
         peripherals.ADC1,
+        peripherals.FLASH,
+        peripherals.GPIO9,
     )
     .await
 }

@@ -1,0 +1,11 @@
+# Partition table for the XIAO ESP32-C6 (8 MB flash).
+#
+# The Matter+Thread firmware is ~2 MB, far larger than the default 1 MB app
+# partition, so we define a 5 MB factory app. The NVS partition is enlarged to
+# 256 KB to give the Matter fabric/ACL key-value store ample room (the first
+# NVS partition is what `matter::persistent_store` uses).
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x40000,
+phy_init,   data, phy,     0x49000,  0x1000,
+factory,    app,  factory, 0x50000,  0x500000,

@@ -4,10 +4,10 @@ Baremetal (`no_std`) Rust firmware for a **Seeed Studio XIAO ESP32-C6** driving 
 **24GHz mmWave Human Static Presence sensor**, exposing presence to **Google Home** as a
 **Matter Occupancy Sensor over Thread** so it can drive automations directly in the Home app.
 
-> Status: **M2 complete (builds)** — the full firmware (sensor + Matter Occupancy Sensor over
-> Thread) compiles for the RISC-V target. On-hardware bring-up (flashing, sensor validation,
-> Google Home commissioning) is the user's step — see [Verification](#verification). Persistence
-> + tuning (M3) is in progress. See [Roadmap](#roadmap).
+> Status: **Feature-complete (builds)** — the full firmware (mmWave sensor → Matter Occupancy
+> Sensor over Thread, with flash-backed fabric persistence and a BOOT-pin factory reset) compiles
+> for the RISC-V target. On-hardware bring-up (flashing, sensor validation, Google Home
+> commissioning) is the user's step — see [Verification](#verification). See [Roadmap](#roadmap).
 
 ## Hardware
 
@@ -51,15 +51,16 @@ cargo install espflash   # for flashing/monitoring over USB
 ## Build, flash, monitor
 
 ```bash
-cargo build --release                       # compile for riscv32imac-unknown-none-elf
-cargo run --release                         # flash + monitor (uses espflash as the runner)
-# or explicitly:
-espflash flash --monitor --chip esp32c6 \
-  target/riscv32imac-unknown-none-elf/release/esp32c6-matter-human-detection
+cargo build --release   # compile for riscv32imac-unknown-none-elf
+cargo run --release     # flash (with partitions.csv) + monitor — uses espflash as the runner
 ```
 
-Expected on M0: the builtin LED blinks at ~1 Hz and the monitor prints a boot line plus a
-heartbeat every 5 seconds.
+The `cargo run` runner flashes with the project's [`partitions.csv`](partitions.csv): a 5 MB app
+partition (the Matter firmware is ~1.7 MB — it does **not** fit the default 1 MB partition) plus a
+256 KB NVS partition for the persisted Matter fabric.
+
+On boot the LED blinks, the monitor prints the boot banner, the QR/pairing code, and — once the
+sensor is wired — live `presence -> OCCUPIED/vacant` transitions.
 
 ## Project layout
 
@@ -71,9 +72,10 @@ src/
   presence.rs       # hold-time debouncer (pure logic)
   sensor.rs         # async LD2410 driver + shared PresenceState
   matter/
-    mod.rs          # EmbassyThreadMatterStack assembly, node, run loop
+    mod.rs          # stack assembly, node, run loop, flash persistence, factory reset
     occupancy.rs    # OccupancySensing (0x0406) handler + Occupancy Sensor (0x0107)
-.cargo/config.toml  # target, espflash runner, linker args, build-std
+partitions.csv      # flash layout: 5 MB app + 256 KB NVS (Matter fabric)
+.cargo/config.toml  # target, espflash runner (+partition table), linker args, build-std
 build.rs            # linker script wiring (linkall.x)
 rust-toolchain.toml # stable + rust-src + riscv32imac target
 ```
@@ -101,8 +103,10 @@ not for shipping products) but is accepted by Google Home for development.
    (`device.state.OccupancySensing`, `is: OCCUPIED`/`UNOCCUPIED`) in the Home app or script editor.
 
 > Cross-check the cluster directly with `chip-tool occupancysensing read occupancy <node> 1`.
-> Because fabric state isn't persisted yet (M3), the device must be re-commissioned after a
-> reboot — a factory reset is also required before re-pairing.
+
+The Matter fabric is **persisted to flash**, so the device stays commissioned across reboots. To
+unpair and re-commission, **factory reset**: hold the **BOOT button (GPIO9)** low for 3+ seconds —
+the firmware clears the stored fabric and reboots.
 
 ## Verification
 
@@ -122,8 +126,10 @@ user's step, per milestone:
 - **M2 — Matter Occupancy Sensor over Thread** ✅ (builds) `rs-matter` + `rs-matter-embassy`,
   OccupancySensing (0x0406) endpoint (device type 0x0107), BLE commissioning, Thread transport;
   commissions into Google Home (test VID `0xFFF1`).
-- **M3 — Persistence + hardening** — flash-backed fabric persistence (`SeqMapKvBlobStore`),
-  occupancy-flicker tuning, SRAM budgeting.
+- **M3 — Persistence + hardening** ✅ (builds) flash-backed fabric persistence
+  (`SeqMapKvBlobStore` over an NVS partition), BOOT-pin factory reset, partition table.
+  Occupancy-flicker tuning (LD2410 gate sensitivity + hold time) and SRAM-headroom soak testing
+  are on-hardware follow-ups.
 
 ## License
 
