@@ -5,40 +5,48 @@
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
     holding buffers for the duration of a data transfer."
 )]
+#![recursion_limit = "256"]
 
 //! Firmware entry point.
 //!
-//! M1 (current): brings up the `esp-rtos`/embassy runtime, blinks the builtin
-//! LED for liveness, and runs the LD2410 mmWave sensor task which logs debounced
-//! presence transitions over USB-Serial-JTAG and publishes them on
-//! [`sensor::PRESENCE`]. The Matter task that consumes that signal is added in
-//! the next milestone.
+//! Brings up the `esp-rtos`/embassy runtime, blinks the builtin LED for
+//! liveness, runs the LD2410 mmWave sensor task (publishing debounced presence
+//! on [`sensor::PRESENCE`]), then runs the Matter-over-Thread stack exposing an
+//! Occupancy Sensor to Google Home.
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use esp32c6_matter_human_detection::{board, sensor};
+use esp32c6_matter_human_detection::{board, matter, sensor};
+use esp_alloc::heap_allocator;
 use esp_backtrace as _;
-use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart};
+use esp_metadata_generated::memory_range;
 use log::info;
+use tinyrlibc as _;
 
 extern crate alloc;
 
 // Creates the app-descriptor required by the esp-idf 2nd-stage bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
 
+/// Heap for the Matter stack (x509/crypto) and the radios. Matter needs a large
+/// heap; this matches the rs-matter-embassy Thread example.
+const HEAP_SIZE: usize = 100 * 1024;
+/// Reclaimable RAM region folded into the heap.
+const RECLAIMED_RAM: usize =
+    memory_range!("DRAM2_UNINIT").end - memory_range!("DRAM2_UNINIT").start;
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
+    heap_allocator!(size: HEAP_SIZE - RECLAIMED_RAM);
+    heap_allocator!(#[ram(reclaimed)] size: RECLAIMED_RAM);
 
-    // Heap for the allocator-backed parts of the stack (Matter needs a large
-    // heap later; 64 KiB is plenty for the sensor-only milestones).
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 65536);
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
     // Start the esp-rtos scheduler that backs the embassy executor.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -46,15 +54,13 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    info!("esp32-c6 human-detection firmware booted (M1)");
+    info!("esp32-c6 human-detection firmware booted (M2: Matter over Thread)");
 
-    // Builtin LED — see `board::LED_GPIO` (GPIO15) for the verified mapping.
+    // Builtin LED liveness — see `board::LED_GPIO` (GPIO15).
     let led = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
     spawner.spawn(blink(led).expect("failed to create blink task"));
 
-    // LD2410 mmWave sensor on a dedicated UART (UART1), kept off the UART0
-    // console pins. RX = GPIO2 (XIAO D2, sensor TX), TX = GPIO21 (XIAO D3,
-    // sensor RX). Config::default() is already 8N1; we only set the baud.
+    // LD2410 mmWave sensor on UART1 (RX = GPIO2/D2, TX = GPIO21/D3), 8N1 @ 256000.
     let sensor_uart = Uart::new(
         peripherals.UART1,
         UartConfig::default().with_baudrate(board::SENSOR_BAUD),
@@ -65,12 +71,14 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     spawner.spawn(sensor::sensor_task(sensor_uart).expect("failed to create sensor task"));
 
-    let mut beats: u32 = 0;
-    loop {
-        info!("alive — heartbeat {beats}");
-        beats = beats.wrapping_add(1);
-        Timer::after(Duration::from_secs(30)).await;
-    }
+    // Run Matter-over-Thread forever (consumes the radios + RNG/ADC1).
+    matter::run(
+        peripherals.IEEE802154,
+        peripherals.BT,
+        peripherals.RNG,
+        peripherals.ADC1,
+    )
+    .await
 }
 
 /// Blinks the builtin LED so the board shows a visible sign of life independent

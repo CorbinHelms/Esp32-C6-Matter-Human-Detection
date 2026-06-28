@@ -4,9 +4,10 @@ Baremetal (`no_std`) Rust firmware for a **Seeed Studio XIAO ESP32-C6** driving 
 **24GHz mmWave Human Static Presence sensor**, exposing presence to **Google Home** as a
 **Matter Occupancy Sensor over Thread** so it can drive automations directly in the Home app.
 
-> Status: **M0 complete** — project scaffold builds for the RISC-V target and blinks +
-> logs on hardware. Sensor (M1) and Matter/Thread (M2) layers are in progress. See
-> [Roadmap](#roadmap).
+> Status: **M2 complete (builds)** — the full firmware (sensor + Matter Occupancy Sensor over
+> Thread) compiles for the RISC-V target. On-hardware bring-up (flashing, sensor validation,
+> Google Home commissioning) is the user's step — see [Verification](#verification). Persistence
+> + tuning (M3) is in progress. See [Roadmap](#roadmap).
 
 ## Hardware
 
@@ -64,23 +65,65 @@ heartbeat every 5 seconds.
 
 ```
 src/
-  bin/main.rs   # entry point: esp-rtos/embassy runtime, task spawn
-  lib.rs        # library root / module map
-  board.rs      # XIAO ESP32-C6 pin map (the non-linear D-label table)
-.cargo/config.toml  # target, espflash runner, linker args
+  bin/main.rs       # entry point: runtime, heap, task spawn, runs Matter
+  lib.rs            # library root / module map
+  board.rs          # XIAO ESP32-C6 pin map (the non-linear D-label table)
+  presence.rs       # hold-time debouncer (pure logic)
+  sensor.rs         # async LD2410 driver + shared PresenceState
+  matter/
+    mod.rs          # EmbassyThreadMatterStack assembly, node, run loop
+    occupancy.rs    # OccupancySensing (0x0406) handler + Occupancy Sensor (0x0107)
+.cargo/config.toml  # target, espflash runner, linker args, build-std
 build.rs            # linker script wiring (linkall.x)
 rust-toolchain.toml # stable + rust-src + riscv32imac target
 ```
 
+The Matter stack (`rs-matter` + `rs-matter-embassy` + `openthread`) is a pre-1.0 ecosystem;
+`rs-matter-embassy` has no crates.io release, so `Cargo.toml` pins it to an exact git commit.
+A normal `cargo build` fetches it automatically.
+
+## Commissioning into Google Home
+
+This uses **test** Device Attestation (VID `0xFFF1`, PID `0x8001`), which is dev-only (no OTA,
+not for shipping products) but is accepted by Google Home for development.
+
+1. **Thread Border Router:** ensure a Google Thread Border Router is on your network
+   (Nest Hub 2nd gen, Nest Hub Max, Nest Wifi Pro, or Google TV Streamer 4K).
+2. **Developer Console:** in the [Google Home Developer Console](https://console.home.google.com),
+   create a project, add a **Matter** integration, and register the test **VID `0xFFF1` / PID `0x8001`**.
+3. **Flash & monitor** the firmware (`cargo run --release`). At startup the stack prints the
+   **QR code and 11-digit manual pairing code** over the USB-Serial-JTAG log (default test
+   passcode `20202021`, discriminator `3840`).
+4. **Pair:** in the Google Home app → **Add → Matter-enabled device** → scan the QR code (or
+   enter the manual code), and choose your Thread network when prompted. Commissioning runs over
+   BLE, then the device joins Thread.
+5. **Automate:** the device appears as an **Occupancy Sensor**. Use it as an automation starter
+   (`device.state.OccupancySensing`, `is: OCCUPIED`/`UNOCCUPIED`) in the Home app or script editor.
+
+> Cross-check the cluster directly with `chip-tool occupancysensing read occupancy <node> 1`.
+> Because fabric state isn't persisted yet (M3), the device must be re-commissioned after a
+> reboot — a factory reset is also required before re-pairing.
+
+## Verification
+
+The firmware is developed in a cloud container with no hardware attached, so "verified" here
+means **builds clean for `riscv32imac-unknown-none-elf`**. On-hardware verification is the
+user's step, per milestone:
+
+- **M0/M1:** flash; the LED blinks and the monitor prints boot + heartbeat; with the sensor
+  wired, walking in/out *and sitting still* logs `presence -> OCCUPIED/vacant`.
+- **M2:** commission into Google Home (above); the Occupancy Sensor reflects presence and works
+  as an automation starter; cross-check `0x0406/Occupancy` with `chip-tool`.
+
 ## Roadmap
 
 - **M0 — Scaffold + bring-up** ✅ builds for target; blink + heartbeat log.
-- **M1 — Sensor** — LD2410 over async UART → debounced presence `Signal`.
-- **M2 — Matter Occupancy Sensor over Thread** — `rs-matter` + `rs-matter-embassy`,
-  hand-built OccupancySensing (0x0406) endpoint (device type 0x0107), BLE commissioning,
-  Thread transport; commission into Google Home (test VID `0xFFF1`).
-- **M3 — Persistence + hardening** — flash-backed fabric persistence, occupancy-flicker
-  tuning, SRAM budgeting.
+- **M1 — Sensor** ✅ LD2410 over async UART → debounced presence (`PresenceState`).
+- **M2 — Matter Occupancy Sensor over Thread** ✅ (builds) `rs-matter` + `rs-matter-embassy`,
+  OccupancySensing (0x0406) endpoint (device type 0x0107), BLE commissioning, Thread transport;
+  commissions into Google Home (test VID `0xFFF1`).
+- **M3 — Persistence + hardening** — flash-backed fabric persistence (`SeqMapKvBlobStore`),
+  occupancy-flicker tuning, SRAM budgeting.
 
 ## License
 

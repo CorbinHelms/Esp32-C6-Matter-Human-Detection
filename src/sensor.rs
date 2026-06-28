@@ -22,6 +22,8 @@
 //! the async executor. Hand-rolling the parser also lets us tolerate the minor
 //! trailing-field differences seen across LD2410 firmware revisions.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
@@ -31,9 +33,53 @@ use log::{info, warn};
 
 use crate::presence::PresenceDebouncer;
 
-/// Stable, debounced occupancy state published by the sensor task and consumed
-/// by the Matter task. `true` = occupied (someone present), `false` = vacant.
-pub static PRESENCE: Signal<CriticalSectionRawMutex, bool> = Signal::new();
+/// Shared, debounced occupancy state: the current value plus a change signal.
+///
+/// The sensor task writes it; the Matter occupancy handler reads the current
+/// value on every attribute read and awaits [`wait_changed`](Self::wait_changed)
+/// to push subscription updates. Decoupling "current value" from "it changed"
+/// (rather than a bare `Signal<bool>`) lets both readers and the change-waiter
+/// coexist without racing on a consumed signal.
+pub struct PresenceState {
+    occupied: AtomicBool,
+    changed: Signal<CriticalSectionRawMutex, ()>,
+}
+
+impl PresenceState {
+    /// Creates a vacant presence state.
+    pub const fn new() -> Self {
+        Self {
+            occupied: AtomicBool::new(false),
+            changed: Signal::new(),
+        }
+    }
+
+    /// Updates the current occupancy, pulsing the change signal on a transition.
+    pub fn set(&self, occupied: bool) {
+        if self.occupied.swap(occupied, Ordering::Relaxed) != occupied {
+            self.changed.signal(());
+        }
+    }
+
+    /// The current debounced occupancy (`true` = someone present).
+    pub fn occupied(&self) -> bool {
+        self.occupied.load(Ordering::Relaxed)
+    }
+
+    /// Resolves the next time the occupancy value changes.
+    pub async fn wait_changed(&self) {
+        self.changed.wait().await;
+    }
+}
+
+impl Default for PresenceState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Shared occupancy state, written by the sensor task and read by Matter.
+pub static PRESENCE: PresenceState = PresenceState::new();
 
 const REPORT_HEADER: [u8; 4] = [0xF4, 0xF3, 0xF2, 0xF1];
 const REPORT_FOOTER: [u8; 4] = [0xF8, 0xF7, 0xF6, 0xF5];
@@ -181,8 +227,6 @@ pub async fn sensor_task(mut uart: Uart<'static, Async>) {
     info!("LD2410 sensor task started (8N1 @ 256000 baud)");
     let mut debouncer = PresenceDebouncer::new(HOLD_MS);
     let mut buf = [0u8; MAX_FRAME_DATA];
-    // Publish the initial (vacant) state so consumers have a defined value.
-    PRESENCE.signal(debouncer.is_present());
 
     let mut consecutive_errors: u32 = 0;
     loop {
@@ -194,7 +238,7 @@ pub async fn sensor_task(mut uart: Uart<'static, Async>) {
                 };
                 let now_ms = Instant::now().as_millis();
                 if let Some(occupied) = debouncer.update(report.state.is_present(), now_ms) {
-                    PRESENCE.signal(occupied);
+                    PRESENCE.set(occupied);
                     info!(
                         "presence -> {} | state={:?} stationary={}cm/{} moving={}cm/{}",
                         if occupied { "OCCUPIED" } else { "vacant" },
