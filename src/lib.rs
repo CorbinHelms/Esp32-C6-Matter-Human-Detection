@@ -4,9 +4,13 @@
 //! Occupancy Sensor over Thread.
 //!
 //! Module map:
-//! - [`board`] — XIAO ESP32-C6 pin assignments (the non-linear D-label map).
+//! - [`board`]    — XIAO ESP32-C6 pin assignments (the non-linear D-label map).
+//! - [`presence`] — debounces the raw radar bit into a stable occupancy state.
+//! - [`sensor`]   — async HLK-LD2410 mmWave driver + the shared presence signal.
 //!
-//! Further modules (`presence`, `sensor`, `matter`) are added in later
-//! milestones as the sensor and Matter/Thread layers come online.
+//! The `matter` module (Matter Occupancy Sensor over Thread) is added in the
+//! next milestone.
 
 pub mod board;
+pub mod presence;
+pub mod sensor;
