@@ -12,91 +12,94 @@ Presence sensor (HLK-LD2410)**, exposing presence to **Google Home** as a **Matt
 Sensor over Thread**, for automations. Architecture and rationale are in [`README.md`](README.md);
 the design record is the approved plan referenced in the git history.
 
-## Status (on-hardware bring-up — 2026-07-02)
+## Status (on-hardware bring-up — updated 2026-07-03, late session)
 
 | Stage | Code | Built | Hardware-verified |
 |------|------|-------|-------------------|
-| M0 scaffold + blink/log | `src/bin/main.rs`, `src/board.rs` | ✅ | ✅ boots from flash, LED blinks, banner prints |
-| M1 LD2410 sensor + debounce | `src/sensor.rs`, `src/presence.rs` | ✅ | ✅ full presence cycle → Matter occupancy attr |
-| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | ⛔ BLOCKED at Thread SRP — see next section |
-| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ⬜ blocked by M2 (can't commission yet) |
+| M0 scaffold + blink/log | `src/bin/main.rs`, `src/board.rs` | ✅ | ✅ |
+| M1 LD2410 sensor + debounce | `src/sensor.rs`, `src/presence.rs` | ✅ | ✅ full presence cycle → occupancy attr |
+| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | 🟡 radio root-cause FIXED & probe-verified; commissioning reaches PASE-over-Thread but still fails at in-context SRP — see below |
+| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ⬜ blocked by M2 |
 
-**M0 and M1 are confirmed on real hardware.** M2 (commissioning into Google Home over Thread) is
-**blocked at the operational-reachability step**; it is the open problem — full analysis below.
+## M2 state of play (READ THIS — supersedes all earlier M2 analysis)
 
-## ⛔ M2 blocker & handoff (READ THIS before touching Matter/Thread)
+### SOLVED: the radio-level root cause (commit e80a8d0)
 
-Every commissioning attempt into Google Home fails the same way. This is a Thread
-**operational-reachability** problem in the pre-1.0 Rust stack — **not** a wiring, firmware-logic, or
-Google Dev-Console issue.
+The original "SRP `OT_ERROR_RESPONSE_TIMEOUT` forever" blocker was **esp-radio 0.18's
+incomplete enhanced-ACK support**: with `EspRadio`'s `enhance_ack_tx: true` the C6 (a) never
+captured the parent's imm-ACKs (every acked TX aborted `RX_ACK_TIMEOUT` after a 200ms deaf
+window) and (b) had its own outgoing auto-ACKs stopped mid-flight (`TX_ACK_STOP`) — the peer's
+MAC saw hardware ACKs so it never retransmitted, while frames died before software. ~90% loss
+of prompt unicast responses, 5-round MLE attaches, 1-in-15 SRP registrations.
 
-### Exactly what happens
-1. Google Home accepts the code and connects over **BLE**; **PASE authenticates** (passcode is
-   correct), then `ArmFailSafe`, attestation (accept the "uncertified device" prompt), **AddNOC →
-   fabric added**, **AddThreadNetwork** — all succeed.
-2. The device **joins the Thread network as a child** (`Role detached -> child`, gets an RLOC16 and an
-   OMR IPv6 `fd6b:…`), logs `Netif up … operational: true`.
-3. It registers its service via **SRP** with the Nest border router — and this **times out every
-   time**: `WARN - SRP callback error: code=28` (28 = OpenThread `OT_ERROR_RESPONSE_TIMEOUT`),
-   repeating.
-4. SRP never completing means the device is **never published in DNS-SD**, so Google Home hangs on
-   **"Checking connectivity to Thread network …"**, **CASE never starts** (no Sigma msgs reach the
-   device), the **~60 s fail-safe expires**, and the fabric **rolls back**. Google retries → loop.
+Fixes live in `vendor/` (regenerate with `scripts/vendor.sh`; diffs in `patches/`, full story
+in `patches/README.md`): `enhance_ack_tx: false` + a 10ms bounded wait in `receive()` (esp-radio
+has silent RX stalls whose self-heal only runs when polled) + RX queue 200. **Verified**: the
+standalone probe registers full Matter-sized 2-service SRP in seconds (was: almost never).
 
-### Environment (all confirmed OK — NOT the cause)
-- Board: Seeed XIAO ESP32-C6, **4 MB flash** (`partitions.csv` was fixed from an 8 MB assumption).
-  Port `/dev/ttyACM0` (USB-Serial-JTAG).
-- Border router: Nest, Thread net `NEST-PAN-A853` — present and working (the device *does* join it).
-- Identity (test): VID `0xFFF1` / PID `0x8001` / passcode `20202021` / discriminator `3840` → manual
-  code **`34970112332`**, QR `MT:-24J042C00KA064IJ3P0WISA0DK5N1K8SQ1RYCU1O0` (PNG at
-  `~/Pictures/matter-occupancy-sensor-qr.png`). Google Home **accepts** this via the "uncertified
-  device" flow — **no Dev-Console registration required** (confirmed; same as Tasmota).
+Disproven along the way (do not re-chase): BLE/coex (BLE is fully deinited before the Thread
+phase — `BleConnector::drop` → `ble_deinit`), rx-on-when-idle, short-address filter, RX-queue
+depth alone, flash-write stalls during SRP.
 
-### Ruled out — do not re-chase
-- **Executor starvation from ISR logging** — a REAL bug, found & FIXED (keep): `esp_radio`'s
-  802.15.4 `warn!("Receive queue full")` fires **from the radio ISR**; over the blocking
-  USB-Serial-JTAG logger it stalled the whole executor (also starved the sensor UART →
-  `Uart(FifoOverflowed)`). Fixed with `ESP_LOG="info,esp_radio=off"` in `.cargo/config.toml`. It was
-  **not** the SRP cause (SRP still times out with it fixed), but it's a legit fix.
-- **Randomized discriminator** — the rs-matter-embassy example randomizes it "in case there are
-  left-overs from our previous registrations in Thread SRP." Tried; generated code is valid (decoded &
-  verified); **did not fix SRP**. Reverted (a fixed code is much easier for iterative testing).
-- **`RX_ON_WHEN_IDLE`** — `openthread-0.2.0/src/esp.rs:94` leaves this radio capability commented out
-  ("TODO: Depends on coex being off in ESP-IDF"). Patched it **on** via a vendored `[patch.crates-io]`;
-  **zero change** to the SRP timeout. Reverted. (0.2.0 is the newest crate and `main` still has the
-  TODO, so a version bump won't help.)
+### The probe — iterate WITHOUT a phone
 
-### Leading remaining hypotheses (for whoever continues)
-1. **BLE/802.15.4 coexistence (most likely).** The C6 has **one 2.4 GHz radio** shared by BLE and
-   802.15.4. In "non-concurrent (BLE only)" commissioning the device keeps **BLE advertising for the
-   whole window** while Thread is up, so coex time-shares the radio and the SRP round-trips to the BR
-   are dropped. Most promising fix: make it **truly non-concurrent** — stop BLE once the operational
-   Thread network is up, so coex is off during SRP/CASE. That teardown lives in **rs-matter-embassy**'s
-   commissioning flow (git dep, `sysgrok` fork @ `efef8b7`), so it likely needs a vendored patch of
-   that crate. This is exactly what the `esp.rs` TODO is gated on ("coex being off").
-2. **SRP/DNS-SD interop/timing** between `openthread` 0.2.0 and the Nest SRP server — a known-finicky
-   area even in Espressif's mature `esp-matter` C stack (their issues #1056 / #1208 / #1325). Cheap
-   thing to try: raise the SRP client **retry count / timeout** (vendored `openthread` patch) so
-   registration can land in a coex gap.
-3. **chip-tool cross-check** — commission with the Matter SDK controller to isolate firmware-vs-Google
-   (needs BLE + the Thread operational dataset on the PC).
+`src/bin/srp-probe.rs` joins the real Nest network using the dataset TLVs captured from a
+commissioning attempt (they print at info level: "Connecting to Thread network, dataset:")
+and measures SRP registration reliability/latency for Matter-shaped payloads, plus replicates
+failure hypotheses (phase D = OtMdns churn). Radio-level x-ray via ISR-safe counters
+(`esp_radio::ieee802154::diag`, vendored). Build/flash:
 
-### Why Tasmota works and we don't
-Tasmota/ESPHome build on **Espressif's ESP-IDF C** Matter/OpenThread stack, which properly handles C6
-BLE/Thread coexistence + rx-on-when-idle for mains-powered devices. Ours uses the **pre-1.0 Rust**
-`rs-matter-embassy` + `openthread` crates, where that coex path is unfinished. "Taking inspiration
-from Tasmota" effectively means the C stack — a different architecture, not a small patch here.
+```sh
+THREAD_DATASET_HEX=$(cat .bringup/dataset.hex) cargo build --release --bin srp-probe
+espflash flash --chip esp32c6 --port /dev/ttyACM0 --partition-table partitions.csv \
+    target/riscv32imac-unknown-none-elf/release/srp-probe
+```
 
-### Tooling notes learned this session
-- **Build needs `cmake` + `clang`** — `mbedtls-rs-sys` compiles mbedtls on-the-fly for `riscv32` via
-  clang. Install both on a bare machine before `cargo build`.
-- **Monitoring:** `espflash`'s interactive monitor needs a TTY; use `espflash monitor --non-interactive
-  --chip esp32c6 --port /dev/ttyACM0 --elf <elf>`. On reset the C6 USB-Serial-JTAG **re-enumerates**
-  (kills attached monitors with "Broken pipe"); the `--non-interactive` monitor with the default reset
-  reconnects through it.
-- **First flash lands in DOWNLOAD mode** if the BOOT button is held — release BOOT, tap RESET.
-- **Commissioning window is ~15 min** and expires fast during debugging — pre-stage the Google Home
-  app at the code-entry screen, then reset the device for a fresh window and commission immediately.
+`.bringup/` (gitignored) holds the dataset hex + all attempt logs. The device was left running
+the probe overnight, logging to `.bringup/overnight-probe.log` — **check those stats first.**
+
+### OPEN: commissioning still fails at SRP-in-main-firmware
+
+Three Google Home attempts (2026-07-02/03). Attempts 2–3 (fixed radio): full BLE interview ✓,
+AddNOC ✓, dataset delivered ✓, clean BLE→Thread handover ✓, 1-round attach ✓, **Google even
+establishes PASE over the operational Thread network** (operational reachability works!) — but
+the device's SRP registration times out through the ~120s fail-safe (code=28 per retry), Google
+never CASEs, fail-safe expires, fabric rolls back. Meanwhile the probe on the same radio
+registers fine — the remaining delta is above the radio. Leads, in order:
+
+1. **OtMdns re-registration churn (prime suspect, probe phase D tests exactly this).**
+   rs-matter-embassy's `OtMdns::run_register` does an *immediate* `srp_remove_all(true)` +
+   re-register on every `wait_mdns()` notification — observed 2–3× within seconds of attach,
+   each clearing the in-flight SRP transaction. If phase D shows churn wedges/starves the
+   client → fix = debounce/dedupe in a vendored rs-matter-embassy (only re-register when the
+   service set actually changed).
+2. **Executor starvation** (partially addressed): PHY now runs on a Priority2 InterruptExecutor
+   (`ProxyRadio`/`PhyRadioRunner`, commit 8e62236), but OT's tasklets/alarms still share the
+   main executor with rs-matter's mbedtls (PASE/SPAKE2p grinds seconds per handshake; SRP
+   client timers+response processing freeze meanwhile). Escalation if needed: second
+   InterruptExecutor tier — PHY@P3(SWI2), whole `ot.run()`@P2(SWI1), rs-matter on thread.
+   (Careful: OT tasklets include SRP ECDSA signing — measure before/after.)
+3. **Ambient RF/server variance is real**: late-night probe runs needed 7–37s registrations
+   (vs 0.2–13s earlier) with several retries. The fail-safe gives ~90s post-attach; SRP retry
+   ladder only fits ~7 attempts. If 1+2 don't fully close it, densify retries (vendored
+   openthread-sys: `OPENTHREAD_CONFIG_SRP_CLIENT_MIN_RETRY_WAIT_INTERVAL` 1800→500ms).
+
+Also observed (don't be confused by it): Google's pre-flow probe always arms the fail-safe
+120s → re-arms 1s → disarms → reconnects for the real flow. And after a failed attempt the
+stack stays in the Thread phase (no BLE re-advertising) with the PASE window eventually
+expiring — reboot the device before any new pairing attempt.
+
+### Session/tooling notes (2026-07-03)
+
+- OT C library now compiles at `OT_LOG_LEVEL=INFO` (vendored openthread-sys). Runtime
+  visibility gated by ESP_LOG: `openthread=info` (NOTE-level, default now) vs
+  `openthread=debug` (full SrpClient/MLE/MeshForwarder internals — very chatty; each line is
+  a blocking USB write on the main executor, measurably harmful in hot paths).
+- Never log from the radio ISR (the original `esp_radio=off` lesson) — use the diag counters.
+- `pkill -f "espflash monitor"` from a compound command self-matches and kills your own shell
+  (exit 144) — kill and relaunch in separate commands.
+- espflash monitor is kept running via nohup writing to a log; grep that file rather than
+  attaching interactively.
 
 ## Toolchain (on your PC — no special proxy/env needed)
 
