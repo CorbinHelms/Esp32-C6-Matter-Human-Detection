@@ -12,17 +12,91 @@ Presence sensor (HLK-LD2410)**, exposing presence to **Google Home** as a **Matt
 Sensor over Thread**, for automations. Architecture and rationale are in [`README.md`](README.md);
 the design record is the approved plan referenced in the git history.
 
-## Status (all built green, none hardware-verified)
+## Status (on-hardware bring-up — 2026-07-02)
 
 | Stage | Code | Built | Hardware-verified |
 |------|------|-------|-------------------|
-| M0 scaffold + blink/log | `src/bin/main.rs`, `src/board.rs` | ✅ | ⬜ you |
-| M1 LD2410 sensor + debounce | `src/sensor.rs`, `src/presence.rs` | ✅ | ⬜ you |
-| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | ⬜ you |
-| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ⬜ you |
+| M0 scaffold + blink/log | `src/bin/main.rs`, `src/board.rs` | ✅ | ✅ boots from flash, LED blinks, banner prints |
+| M1 LD2410 sensor + debounce | `src/sensor.rs`, `src/presence.rs` | ✅ | ✅ full presence cycle → Matter occupancy attr |
+| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | ⛔ BLOCKED at Thread SRP — see next section |
+| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ⬜ blocked by M2 (can't commission yet) |
 
-The Matter subscription path (does occupancy reach Google Home?) was **adversarially review-verified
-against the rs-matter source** — it is correct by construction — but still needs a live confirmation.
+**M0 and M1 are confirmed on real hardware.** M2 (commissioning into Google Home over Thread) is
+**blocked at the operational-reachability step**; it is the open problem — full analysis below.
+
+## ⛔ M2 blocker & handoff (READ THIS before touching Matter/Thread)
+
+Every commissioning attempt into Google Home fails the same way. This is a Thread
+**operational-reachability** problem in the pre-1.0 Rust stack — **not** a wiring, firmware-logic, or
+Google Dev-Console issue.
+
+### Exactly what happens
+1. Google Home accepts the code and connects over **BLE**; **PASE authenticates** (passcode is
+   correct), then `ArmFailSafe`, attestation (accept the "uncertified device" prompt), **AddNOC →
+   fabric added**, **AddThreadNetwork** — all succeed.
+2. The device **joins the Thread network as a child** (`Role detached -> child`, gets an RLOC16 and an
+   OMR IPv6 `fd6b:…`), logs `Netif up … operational: true`.
+3. It registers its service via **SRP** with the Nest border router — and this **times out every
+   time**: `WARN - SRP callback error: code=28` (28 = OpenThread `OT_ERROR_RESPONSE_TIMEOUT`),
+   repeating.
+4. SRP never completing means the device is **never published in DNS-SD**, so Google Home hangs on
+   **"Checking connectivity to Thread network …"**, **CASE never starts** (no Sigma msgs reach the
+   device), the **~60 s fail-safe expires**, and the fabric **rolls back**. Google retries → loop.
+
+### Environment (all confirmed OK — NOT the cause)
+- Board: Seeed XIAO ESP32-C6, **4 MB flash** (`partitions.csv` was fixed from an 8 MB assumption).
+  Port `/dev/ttyACM0` (USB-Serial-JTAG).
+- Border router: Nest, Thread net `NEST-PAN-A853` — present and working (the device *does* join it).
+- Identity (test): VID `0xFFF1` / PID `0x8001` / passcode `20202021` / discriminator `3840` → manual
+  code **`34970112332`**, QR `MT:-24J042C00KA064IJ3P0WISA0DK5N1K8SQ1RYCU1O0` (PNG at
+  `~/Pictures/matter-occupancy-sensor-qr.png`). Google Home **accepts** this via the "uncertified
+  device" flow — **no Dev-Console registration required** (confirmed; same as Tasmota).
+
+### Ruled out — do not re-chase
+- **Executor starvation from ISR logging** — a REAL bug, found & FIXED (keep): `esp_radio`'s
+  802.15.4 `warn!("Receive queue full")` fires **from the radio ISR**; over the blocking
+  USB-Serial-JTAG logger it stalled the whole executor (also starved the sensor UART →
+  `Uart(FifoOverflowed)`). Fixed with `ESP_LOG="info,esp_radio=off"` in `.cargo/config.toml`. It was
+  **not** the SRP cause (SRP still times out with it fixed), but it's a legit fix.
+- **Randomized discriminator** — the rs-matter-embassy example randomizes it "in case there are
+  left-overs from our previous registrations in Thread SRP." Tried; generated code is valid (decoded &
+  verified); **did not fix SRP**. Reverted (a fixed code is much easier for iterative testing).
+- **`RX_ON_WHEN_IDLE`** — `openthread-0.2.0/src/esp.rs:94` leaves this radio capability commented out
+  ("TODO: Depends on coex being off in ESP-IDF"). Patched it **on** via a vendored `[patch.crates-io]`;
+  **zero change** to the SRP timeout. Reverted. (0.2.0 is the newest crate and `main` still has the
+  TODO, so a version bump won't help.)
+
+### Leading remaining hypotheses (for whoever continues)
+1. **BLE/802.15.4 coexistence (most likely).** The C6 has **one 2.4 GHz radio** shared by BLE and
+   802.15.4. In "non-concurrent (BLE only)" commissioning the device keeps **BLE advertising for the
+   whole window** while Thread is up, so coex time-shares the radio and the SRP round-trips to the BR
+   are dropped. Most promising fix: make it **truly non-concurrent** — stop BLE once the operational
+   Thread network is up, so coex is off during SRP/CASE. That teardown lives in **rs-matter-embassy**'s
+   commissioning flow (git dep, `sysgrok` fork @ `efef8b7`), so it likely needs a vendored patch of
+   that crate. This is exactly what the `esp.rs` TODO is gated on ("coex being off").
+2. **SRP/DNS-SD interop/timing** between `openthread` 0.2.0 and the Nest SRP server — a known-finicky
+   area even in Espressif's mature `esp-matter` C stack (their issues #1056 / #1208 / #1325). Cheap
+   thing to try: raise the SRP client **retry count / timeout** (vendored `openthread` patch) so
+   registration can land in a coex gap.
+3. **chip-tool cross-check** — commission with the Matter SDK controller to isolate firmware-vs-Google
+   (needs BLE + the Thread operational dataset on the PC).
+
+### Why Tasmota works and we don't
+Tasmota/ESPHome build on **Espressif's ESP-IDF C** Matter/OpenThread stack, which properly handles C6
+BLE/Thread coexistence + rx-on-when-idle for mains-powered devices. Ours uses the **pre-1.0 Rust**
+`rs-matter-embassy` + `openthread` crates, where that coex path is unfinished. "Taking inspiration
+from Tasmota" effectively means the C stack — a different architecture, not a small patch here.
+
+### Tooling notes learned this session
+- **Build needs `cmake` + `clang`** — `mbedtls-rs-sys` compiles mbedtls on-the-fly for `riscv32` via
+  clang. Install both on a bare machine before `cargo build`.
+- **Monitoring:** `espflash`'s interactive monitor needs a TTY; use `espflash monitor --non-interactive
+  --chip esp32c6 --port /dev/ttyACM0 --elf <elf>`. On reset the C6 USB-Serial-JTAG **re-enumerates**
+  (kills attached monitors with "Broken pipe"); the `--non-interactive` monitor with the default reset
+  reconnects through it.
+- **First flash lands in DOWNLOAD mode** if the BOOT button is held — release BOOT, tap RESET.
+- **Commissioning window is ~15 min** and expires fast during debugging — pre-stage the Google Home
+  app at the code-entry screen, then reset the device for a fresh window and commission immediately.
 
 ## Toolchain (on your PC — no special proxy/env needed)
 

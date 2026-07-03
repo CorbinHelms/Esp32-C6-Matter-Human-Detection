@@ -2,7 +2,15 @@
 runner = "espflash flash --monitor --chip esp32c6 --partition-table partitions.csv"
 
 [env]
-ESP_LOG="info"
+# esp_radio's 802.15.4 "Receive queue full" warn fires from the radio *ISR*; over
+# the blocking USB-Serial-JTAG logger it stalls the executor under Thread load
+# (starves the radio-drain task + the sensor UART -> CASE never completes and
+# commissioning rolls back). Filtering it out makes that warn a no-op (never
+# formatted/written), so the ISR can't block. OpenThread stays at `info` for now
+# to keep full visibility into the Thread attach + SRP registration while we
+# diagnose why the operational handshake stalls; only the catastrophic esp_radio
+# ISR warn is filtered.
+ESP_LOG="info,esp_radio=off"
 
 [build]
 rustflags = [
