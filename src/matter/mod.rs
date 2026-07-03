@@ -29,7 +29,7 @@ use log::{info, warn};
 
 use openthread::ProxyRadio;
 
-use rs_matter_embassy::matter::crypto::{default_crypto, Crypto, RngCore};
+use rs_matter_embassy::matter::crypto::{default_crypto, Crypto};
 use rs_matter_embassy::matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter_embassy::matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter_embassy::matter::dm::devices::test::{
@@ -174,9 +174,19 @@ pub async fn run(
     );
     let mut weak_rand = crypto.weak_rand().unwrap();
 
-    // A random EUI-64 for the Thread interface.
-    let mut ieee_eui64 = [0u8; 8];
-    weak_rand.fill_bytes(&mut ieee_eui64);
+    // A STABLE EUI-64 for the Thread interface, derived from the factory MAC
+    // (EUI-48 → EUI-64 ff:fe stuffing). The rs-matter-embassy example uses a
+    // random EUI per boot, but the SRP hostname and the mesh addresses derive
+    // from it: with a random EUI every reboot re-registers under a NEW host
+    // name while claiming the same Matter service instance — the SRP server
+    // rejects it as a duplicate (code=8) and the DNS-SD record keeps pointing
+    // at the previous boot's (dead) addresses until the lease expires, so the
+    // device drops off the fabric after every power cycle.
+    let mac = esp_hal::efuse::base_mac_address();
+    let mac = mac.as_bytes();
+    let ieee_eui64 = [
+        mac[0], mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5],
+    ];
 
     // Allocate the (large) Matter stack statically.
     let stack = mk_static!(EmbassyThreadMatterStack::<BUMP_SIZE, ()>).init_with(
