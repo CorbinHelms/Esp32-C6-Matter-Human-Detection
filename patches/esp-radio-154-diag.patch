@@ -1,0 +1,182 @@
+--- a/esp-radio/src/ieee802154/raw.rs
++++ b/esp-radio/src/ieee802154/raw.rs
+@@ -378,7 +378,9 @@
+                 channel: freq_to_channel(freq()),
+             };
+             state.rx_queue.push_back(item);
++            diag::inc(&diag::RX_QUEUED);
+         } else {
++            diag::inc(&diag::RX_QUEUE_FULL);
+             warn!("Receive queue full");
+         }
+     }
+@@ -490,6 +492,7 @@
+     // unexpectedly when used together with BLE
+     STATE.with(|state| {
+         if state.state == Ieee802154State::Receive {
++            diag::inc(&diag::RX_REARM);
+             set_cmd(Command::RxStart);
+         }
+     });
+@@ -507,6 +510,13 @@
+ 
+     trace!("events = {:032b}", events);
+ 
++    if events & Event::RxAbort != 0 {
++        diag::inc_idx(&diag::RX_ABORT, rx_abort_reason);
++    }
++    if events & Event::TxAbort != 0 {
++        diag::inc_idx(&diag::TX_ABORT, tx_abort_reason);
++    }
++
+     let mut needs_next_operation = false;
+ 
+     // First phase RX abort processing (handles RX-state aborts)
+@@ -516,6 +526,7 @@
+     }
+ 
+     if events & Event::RxSfdDone != 0 {
++        diag::inc(&diag::SFD);
+         trace!("rx sfd done");
+     }
+ 
+@@ -529,6 +540,7 @@
+     }
+ 
+     if events & Event::RxDone != 0 {
++        diag::inc(&diag::RX_DONE_EVT);
+         trace!("rx done");
+         isr_handle_rx_done(&mut needs_next_operation);
+     }
+@@ -581,6 +593,7 @@
+                 *needs_next_op = false;
+             } else {
+                 // TX complete, no ACK needed
++                diag::inc(&diag::TX_DONE);
+                 super::tx_done();
+                 *needs_next_op = true;
+             }
+@@ -615,15 +628,18 @@
+                 // auto tx ack for frame version 0b00 and 0b01
+                 // Frame data already copied above. Defer rx_available()
+                 // notification until ACK completes (isr_handle_ack_tx_done).
++                diag::inc(&diag::RX_ACK_IMM);
+                 state.state = Ieee802154State::TxAck;
+                 *needs_next_op = false;
+             } else if should_send_enhanced_ack(frm) {
+                 // Enhanced ACK for frame version 0b10 - TODO: full enh-ack support
+                 // Frame data already copied above.
++                diag::inc(&diag::RX_ACK_ENH);
+                 state.state = Ieee802154State::TxEnhAck;
+                 *needs_next_op = false;
+             } else {
+                 // No ACK needed, notify immediately (data already copied above)
++                diag::inc(&diag::RX_NO_ACK);
+                 super::rx_available();
+                 *needs_next_op = true;
+             }
+@@ -635,6 +651,7 @@
+ fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
+     // Frame was already copied to queue in isr_handle_rx_done (we must copy
+     // immediately because we only have one RX buffer). Now notify upper layer.
++    diag::inc(&diag::ACK_TX_DONE);
+     super::rx_available();
+     *needs_next_op = true;
+ }
+@@ -651,6 +668,7 @@
+         });
+     });
+     // ACK received for our transmitted frame
++    diag::inc(&diag::ACK_RX_DONE);
+     super::tx_done();
+     *needs_next_op = true;
+ }
+@@ -737,6 +755,7 @@
+ /// which calls ieee802154_rx_ack_timeout_callback
+ fn isr_handle_timer0_done(needs_next_op: &mut bool) {
+     // Timer0 fired while waiting for ACK - TX failed with no ACK
++    diag::inc(&diag::ACK_TIMEOUT);
+     timer0_stop();
+     disable_events(Event::Timer0Overflow as u16);
+     super::tx_failed();
+@@ -818,3 +837,68 @@
+     timer0_set_threshold(duration);
+     timer0_start();
+ }
++
++/// VENDORED PATCH: ISR-safe diagnostic counters for the Thread bring-up.
++///
++/// Incremented from the radio ISR with relaxed atomics (never logs, never
++/// blocks — logging from this ISR is what stalled the executor originally).
++/// A firmware task reads `snapshot()` periodically and prints the deltas.
++pub mod diag {
++    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
++
++    pub(crate) static SFD: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_QUEUED: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_QUEUE_FULL: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_ACK_IMM: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_ACK_ENH: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_NO_ACK: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static ACK_TX_DONE: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static TX_DONE: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static ACK_RX_DONE: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static ACK_TIMEOUT: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_REARM: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_DONE_EVT: AtomicU32 = AtomicU32::new(0);
++    pub(crate) static RX_ABORT: [AtomicU32; 32] = [const { AtomicU32::new(0) }; 32];
++    pub(crate) static TX_ABORT: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
++
++    #[inline(always)]
++    pub(crate) fn inc(c: &AtomicU32) {
++        c.fetch_add(1, Relaxed);
++    }
++
++    #[inline(always)]
++    pub(crate) fn inc_idx(arr: &[AtomicU32], idx: u32) {
++        let i = (idx as usize).min(arr.len() - 1);
++        arr[i].fetch_add(1, Relaxed);
++    }
++
++    /// Snapshot of all counters:
++    /// `(named, rx_abort_by_reason, tx_abort_by_reason)` where `named` is
++    /// `[sfd, rx_queued, rx_queue_full, rx_ack_imm, rx_ack_enh, rx_no_ack,
++    ///   ack_tx_done, tx_done, ack_rx_done, ack_timeout, rx_rearm, rx_done_evt]`.
++    pub fn snapshot() -> ([u32; 12], [u32; 32], [u32; 16]) {
++        let named = [
++            SFD.load(Relaxed),
++            RX_QUEUED.load(Relaxed),
++            RX_QUEUE_FULL.load(Relaxed),
++            RX_ACK_IMM.load(Relaxed),
++            RX_ACK_ENH.load(Relaxed),
++            RX_NO_ACK.load(Relaxed),
++            ACK_TX_DONE.load(Relaxed),
++            TX_DONE.load(Relaxed),
++            ACK_RX_DONE.load(Relaxed),
++            ACK_TIMEOUT.load(Relaxed),
++            RX_REARM.load(Relaxed),
++            RX_DONE_EVT.load(Relaxed),
++        ];
++        let mut rx = [0u32; 32];
++        for (i, c) in RX_ABORT.iter().enumerate() {
++            rx[i] = c.load(Relaxed);
++        }
++        let mut tx = [0u32; 16];
++        for (i, c) in TX_ABORT.iter().enumerate() {
++            tx[i] = c.load(Relaxed);
++        }
++        (named, rx, tx)
++    }
++}
+--- a/esp-radio/src/ieee802154/mod.rs
++++ b/esp-radio/src/ieee802154/mod.rs
+@@ -39,6 +39,9 @@
+ mod pib;
+ mod raw;
+ 
++// VENDORED PATCH: expose the ISR-safe radio diagnostic counters.
++pub use raw::diag;
++
+ /// IEEE 802.15.4 errors
+ #[derive(Display, Debug, Clone, Copy, PartialEq, Eq)]
+ #[cfg_attr(feature = "defmt", derive(defmt::Format))]

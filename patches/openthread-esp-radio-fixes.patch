@@ -1,0 +1,58 @@
+--- a/openthread/src/esp.rs
++++ b/openthread/src/esp.rs
+@@ -42,7 +42,13 @@
+         let esp_config = EspConfig {
+             auto_ack_tx: true,
+             auto_ack_rx: true,
+-            enhance_ack_tx: true,
++            // VENDORED PATCH: was `true`. esp-radio's enhanced-ack support is
++            // explicitly incomplete ("TODO: full enh-ack support"), and with it
++            // enabled the radio never captures the parent's imm-ACKs (every
++            // acked TX aborts with RX_ACK_TIMEOUT) and outgoing auto-ACKs get
++            // stopped mid-flight (TX_ACK_STOP). Thread 1.x data frames on a
++            // non-CSL MED use 2006 imm-ACKs, so enh-ack is not needed.
++            enhance_ack_tx: false,
+             promiscuous: config.promiscuous,
+             coordinator: false,
+             rx_when_idle: config.rx_when_idle,
+@@ -66,7 +72,14 @@
+             // The default of 10 is too small for OpenThread,
+             // which can have bursts of incoming frames, so we increase it to 50.
+             // TODO: See if we can get by with a smaller number to save memory.
+-            rx_queue_size: 50,
++            //
++            // VENDORED PATCH (esp-rs/openthread#92): 50 is still too small on
++            // single-core chips (ESP32-C6): long executor stalls (mbedtls ECDSA
++            // for SRP/CASE, blocking flash writes) let bursts overflow the queue
++            // and drop frames ("Receive queue full"), which kills Matter
++            // commissioning (SRP response / CASE Sigma frames lost). Upstream
++            // validated depth 200 on hardware (~26KB extra heap).
++            rx_queue_size: 200,
+             ..Default::default()
+         };
+ 
+@@ -191,7 +204,23 @@
+                 break frame;
+             }
+ 
+-            RX_SIGNAL.wait().await;
++            // VENDORED PATCH: bounded wait instead of a bare signal wait.
++            //
++            // esp-radio's 15.4 driver has a known silent-RX-stall condition (see
++            // `ensure_receive_enabled` in esp-radio ieee802154/raw.rs: "avoids a
++            // problem with rx stopping unexpectedly"), and its self-heal only
++            // runs when the driver API is polled. A bare `RX_SIGNAL.wait()`
++            // never polls again, so a stall right after our own TX leaves the
++            // radio deaf until the next unrelated radio command — exactly when
++            // SRP / DNS / CASE responses arrive (observed as ~90% loss of
++            // prompt unicast responses while ambient multicasts get through).
++            // Re-polling every 10ms re-arms RX (`raw_received` →
++            // `ensure_receive_enabled`) within one MAC-retry window.
++            embassy_futures::select::select(
++                RX_SIGNAL.wait(),
++                embassy_time::Timer::after(embassy_time::Duration::from_millis(10)),
++            )
++            .await;
+         };
+ 
+         if raw.data.len() < 1 {
