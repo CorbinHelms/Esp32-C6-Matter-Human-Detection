@@ -182,10 +182,15 @@ pub async fn run(
     // rejects it as a duplicate (code=8) and the DNS-SD record keeps pointing
     // at the previous boot's (dead) addresses until the lease expires, so the
     // device drops off the fabric after every power cycle.
+    // The locally-administered bit is set because the plain factory-MAC EUI's
+    // SRP host name was burned on the border router by earlier bring-up
+    // registrations under a since-rotated ECDSA key (SRP reserves names for
+    // the key-lease duration; a different key claiming the same name gets
+    // OT_ERROR_DUPLICATED). The derived name is still stable across reboots.
     let mac = esp_hal::efuse::base_mac_address();
     let mac = mac.as_bytes();
     let ieee_eui64 = [
-        mac[0], mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5],
+        mac[0] | 0x02, mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5],
     ];
 
     // Allocate the (large) Matter stack statically.
