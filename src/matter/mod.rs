@@ -225,7 +225,9 @@ pub async fn run(
     let mut pt_buf = [0u8; PARTITION_TABLE_MAX_LEN];
     let mut store = persistent_store(flash, &mut pt_buf[..]);
     stack.startup(&crypto, &mut store).await.unwrap();
-    let kv = stack.matter().kv(store);
+    // Borrow (not move) the store into the KV handle: the factory-reset path
+    // below needs it back for the full stack-level reset.
+    let kv = stack.matter().kv(&mut store);
 
     if stack.is_commissioned() {
         info!(
@@ -256,9 +258,17 @@ pub async fn run(
         select(&mut matter, &mut wait_reset).coalesce().await.unwrap();
     }
 
-    // Reached only when the user requested a factory reset.
-    warn!("Factory reset: clearing Matter fabric storage");
-    stack.matter().reset_persist(kv).await.unwrap();
+    // Reached only when the user requested a factory reset. Use the full
+    // stack-level reset: `matter().reset_persist()` alone clears the fabrics
+    // but leaves the stack state — including the commissioned Thread
+    // credentials in the wireless-networks store. A device reset that way
+    // boots "not commissioned" yet still holding network creds, and the
+    // engine hot-loops no-op connect attempts through the commissioning
+    // (noop) net-ctl, spamming "Connecting to network with ID ..." and
+    // disrupting re-pairing.
+    warn!("Factory reset: clearing Matter fabric + network storage");
+    drop(kv);
+    stack.reset(&mut store).await.unwrap();
     warn!("Rebooting...");
     esp_hal::system::software_reset()
 }
