@@ -10,10 +10,12 @@ runner = "espflash flash --monitor --chip esp32c6 --partition-table partitions.c
 # to keep full visibility into the Thread attach + SRP registration while we
 # diagnose why the operational handshake stalls; only the catastrophic esp_radio
 # ISR warn is filtered.
-# `openthread=debug` surfaces the OpenThread C internals (SRP client, MLE, MAC)
-# which the vendored openthread-sys compiles at OT_LOG_LEVEL=INFO and the crate
-# maps INFO -> log::debug!. Drop that clause once M2 commissioning is verified.
-ESP_LOG="info,esp_radio=off,openthread=debug"
+# `openthread=info` keeps OT NOTE-level events visible while muting the very
+# chatty INFO internals (SrpClient/MLE/MeshForwarder map to log::debug!) —
+# each debug line costs a blocking USB-Serial-JTAG write on the main executor,
+# which measurably starves radio-adjacent tasks during commissioning. Switch
+# to `openthread=debug` when deep OT diagnostics are needed.
+ESP_LOG="info,esp_radio=off,openthread=info"
 
 [build]
 rustflags = [

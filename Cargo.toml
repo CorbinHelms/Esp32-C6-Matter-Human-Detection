@@ -41,10 +41,12 @@ rs-matter-embassy = { git = "https://github.com/sysgrok/rs-matter-embassy", rev 
 ] }
 # C-string helpers required by the OpenThread/MbedTLS C code linked under Thread.
 tinyrlibc = { version = "0.5", default-features = false, features = ["memchr", "utoa", "strtoul"] }
-# Direct deps of the srp-probe diagnostic binary (same crates rs-matter-embassy
-# already pulls in; `openthread` resolves to the vendored copy via [patch]).
+# Direct deps for the split-radio architecture (PHY on the interrupt executor)
+# and the srp-probe diagnostic binary (same crates rs-matter-embassy already
+# pulls in; `openthread` resolves to the vendored copy via [patch]).
 openthread = { version = "0.2", features = ["esp-radio"] }
 heapless   = { version = "0.9", default-features = false }
+bt-hci     = { version = "0.8", default-features = false }
 
 # --- misc ---
 log              = "0.4.27"

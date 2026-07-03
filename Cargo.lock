@@ -1898,6 +1898,7 @@ dependencies = [
 name = "esp32c6-matter-human-detection"
 version = "0.1.0"
 dependencies = [
+ "bt-hci",
  "critical-section",
  "embassy-embedded-hal",
  "embassy-executor",

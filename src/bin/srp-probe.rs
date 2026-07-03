@@ -170,6 +170,7 @@ async fn probe(ot: OpenThread<'_>) -> ! {
     // Small per-boot discriminator so re-flashes don't collide with stale
     // server-side registrations under a different ECDSA key.
     let seed = (Instant::now().as_ticks() as u16) ^ 0x5aa5;
+    info!("PROBE: seed {seed:04X}");
 
     let mut hostname = heapless::String::<24>::new();
     let _ = core::fmt::write(&mut hostname, format_args!("PROBE-{seed:04X}"));
@@ -240,12 +241,17 @@ async fn probe(ot: OpenThread<'_>) -> ! {
         key_lease_secs: 0,
     };
 
-    let mut stats = [(0u32, 0u32, 0u64); 3]; // (ok, fail, total_ok_ms)
+    let mut stats = [(0u32, 0u32, 0u64); 4]; // (ok, fail, total_ok_ms)
 
     loop {
-        for (idx, name) in ["A/small-1svc", "B/matterc-1svc", "C/matter-2svc"]
-            .iter()
-            .enumerate()
+        for (idx, name) in [
+            "A/small-1svc",
+            "B/matterc-1svc",
+            "C/matter-2svc",
+            "D/churn-2svc",
+        ]
+        .iter()
+        .enumerate()
         {
             // (Re-)register from a clean local state. The immediate clear also
             // wipes the host name, so the conf must be re-set each cycle
@@ -265,7 +271,30 @@ async fn probe(ot: OpenThread<'_>) -> ! {
                 1 => {
                     ot.srp_add_service(&svc_commissionable).unwrap();
                 }
+                2 => {
+                    ot.srp_add_service(&svc_commissionable).unwrap();
+                    ot.srp_add_service(&svc_operational).unwrap();
+                }
                 _ => {
+                    // Replicate rs-matter-embassy OtMdns::run_register churn:
+                    // repeated *immediate* clear + full re-register while the
+                    // previous SRP update transaction is still in flight (the
+                    // main firmware does this 2-3x within the first seconds
+                    // after attach). Suspected to wedge the SRP client.
+                    for _ in 0..2 {
+                        ot.srp_add_service(&svc_commissionable).unwrap();
+                        ot.srp_add_service(&svc_operational).unwrap();
+                        // Let the client actually transmit (tx jitter is
+                        // 10-700ms), then yank everything mid-transaction.
+                        Timer::after(Duration::from_millis(800)).await;
+                        ot.srp_remove_all(true).unwrap();
+                        ot.srp_set_conf(&SrpConf {
+                            host_name: hostname.as_str(),
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    }
+                    // Final (real) registration, same as phase C.
                     ot.srp_add_service(&svc_commissionable).unwrap();
                     ot.srp_add_service(&svc_operational).unwrap();
                 }

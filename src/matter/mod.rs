@@ -15,15 +15,19 @@ pub mod occupancy;
 use core::borrow::BorrowMut;
 use core::pin::pin;
 
+use bt_hci::controller::ExternalController;
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_futures::select::{select, Either};
 use esp_bootloader_esp_idf::partitions::{
     read_partition_table, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
 };
 use esp_hal::gpio::{Input, InputConfig, Pull};
-use esp_hal::peripherals::{ADC1, BT, FLASH, GPIO9, IEEE802154, RNG};
+use esp_hal::peripherals::{ADC1, BT, FLASH, GPIO9, RNG};
+use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use log::{info, warn};
+
+use openthread::ProxyRadio;
 
 use rs_matter_embassy::matter::crypto::{default_crypto, Crypto, RngCore};
 use rs_matter_embassy::matter::dm::clusters::basic_info::BasicInfoConfig;
@@ -41,8 +45,10 @@ use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
 use rs_matter_embassy::persist::SeqMapKvBlobStore;
 use rs_matter_embassy::stack::rand::reseeding_csprng;
-use rs_matter_embassy::wireless::esp::EspThreadDriver;
-use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
+use rs_matter_embassy::wireless::{
+    BleDriver, BleDriverTask, EmbassyThread, EmbassyThreadMatterStack, ThreadDriver,
+    ThreadDriverTask,
+};
 
 use occupancy::{OccupancySensingHandler, DEV_TYPE_OCCUPANCY_SENSOR};
 
@@ -57,6 +63,61 @@ const OCC_ENDPOINT_ID: u16 = 1;
 
 /// Seconds the BOOT pin (GPIO9) must be held low to factory-reset the fabric.
 const RESET_SECS: u64 = 3;
+
+/// Radio capabilities of [`openthread::esp::EspRadio`], as the const-generic
+/// parameter for [`ProxyRadio`] (must mirror `EspRadio::CAPS`).
+pub const RADIO_CAPS: openthread::sys::otRadioCaps = (openthread::sys::OT_RADIO_CAPS_ACK_TIMEOUT
+    | openthread::sys::OT_RADIO_CAPS_CSMA_BACKOFF)
+    as openthread::sys::otRadioCaps;
+
+/// Wireless driver for the Matter stack with the 802.15.4 PHY split off:
+/// the Thread phase drives a [`ProxyRadio`] whose actual PHY servicing runs
+/// in the high-priority interrupt executor (see `main.rs`), so multi-second
+/// mbedtls operations on the main executor (PASE/SPAKE2p, attestation, CASE
+/// Sigma, SRP ECDSA) cannot starve radio timing. Without this, commissioning
+/// crypto stalls made the device deaf to prompt unicast responses (SRP
+/// replies, post-PASE IM requests) — the last piece of the M2 blocker.
+///
+/// BLE keeps `EspThreadDriver`'s per-phase semantics: the controller is
+/// created for each commissioning (GATT) phase and fully deinitialized
+/// (`BleConnector::drop` → `ble_deinit`) before the Thread phase runs.
+pub struct SplitRadioDriver<'d> {
+    proxy: ProxyRadio<'static, RADIO_CAPS>,
+    bt_peripheral: BT<'d>,
+}
+
+impl<'d> SplitRadioDriver<'d> {
+    pub fn new(proxy: ProxyRadio<'static, RADIO_CAPS>, bt_peripheral: BT<'d>) -> Self {
+        Self {
+            proxy,
+            bt_peripheral,
+        }
+    }
+}
+
+impl ThreadDriver for SplitRadioDriver<'_> {
+    async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+    where
+        A: ThreadDriverTask,
+    {
+        task.run(&mut self.proxy).await
+    }
+}
+
+impl BleDriver for SplitRadioDriver<'_> {
+    async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+    where
+        A: BleDriverTask,
+    {
+        // Same construction as rs-matter-embassy's `EspThreadDriver` (SLOTS=20).
+        let ble_controller = ExternalController::<_, 20>::new(
+            BleConnector::new(self.bt_peripheral.reborrow(), Default::default())
+                .expect("BLE controller init"),
+        );
+
+        task.run(ble_controller).await
+    }
+}
 
 /// Allocates a `'static`, zeroed `$t` from a `StaticCell` (avoids blowing the
 /// program stack with the ~35-50KB Matter stack).
@@ -91,11 +152,13 @@ const NODE: Node = Node {
     ],
 };
 
-/// Brings up Matter-over-Thread and runs it forever. Consumes the radios, the
-/// RNG/ADC1 used to seed the crypto CSPRNG, the flash (for fabric persistence),
-/// and the BOOT pin (GPIO9, used for factory reset).
+/// Brings up Matter-over-Thread and runs it forever. Consumes the proxy end
+/// of the split 802.15.4 radio (the PHY side runs in the interrupt executor,
+/// see `main.rs`), the BT peripheral, the RNG/ADC1 used to seed the crypto
+/// CSPRNG, the flash (for fabric persistence), and the BOOT pin (GPIO9, used
+/// for factory reset).
 pub async fn run(
-    ieee802154: IEEE802154<'static>,
+    radio_proxy: ProxyRadio<'static, RADIO_CAPS>,
     bt: BT<'static>,
     rng: RNG<'static>,
     adc1: ADC1<'static>,
@@ -164,7 +227,7 @@ pub async fn run(
         // Run Matter; concurrently watch the BOOT pin for a factory-reset request.
         let mut matter = pin!(stack.run(
             EmbassyThread::new(
-                EspThreadDriver::new(ieee802154, bt),
+                SplitRadioDriver::new(radio_proxy, bt),
                 crypto.rand().unwrap(),
                 ieee_eui64,
                 &kv,

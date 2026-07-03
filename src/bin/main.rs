@@ -20,11 +20,16 @@ use esp32c6_matter_human_detection::{board, matter, sensor};
 use esp_alloc::heap_allocator;
 use esp_backtrace as _;
 use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::interrupt::Priority;
 use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart};
 use esp_metadata_generated::memory_range;
+use esp_rtos::embassy::InterruptExecutor;
 use log::info;
+use openthread::esp::{EspRadio, Ieee802154};
+use openthread::{EmbassyTimeTimer, PhyRadioRunner, ProxyRadio, ProxyRadioResources};
+use static_cell::StaticCell;
 use tinyrlibc as _;
 
 extern crate alloc;
@@ -72,10 +77,31 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     spawner.spawn(sensor::sensor_task(sensor_uart).expect("failed to create sensor task"));
 
-    // Run Matter-over-Thread forever (consumes the radios, RNG/ADC1, flash for
-    // fabric persistence, and the BOOT pin for factory reset).
+    // Split the 802.15.4 radio: the PHY half runs on a high-priority interrupt
+    // executor so radio timing (ACKs, MRP-critical RX) survives the multi-
+    // second mbedtls operations Matter commissioning runs on this executor
+    // (PASE/SPAKE2p, attestation, CASE). The Matter stack gets the proxy half.
+    static RADIO_EXECUTOR: StaticCell<InterruptExecutor<1>> = StaticCell::new();
+    let radio_spawner = RADIO_EXECUTOR
+        .init(InterruptExecutor::new(sw_interrupt.software_interrupt1))
+        .start(Priority::Priority2);
+
+    static PROXY_RADIO_RESOURCES: StaticCell<ProxyRadioResources> = StaticCell::new();
+    let (radio_proxy, phy_runner) = ProxyRadio::<{ matter::RADIO_CAPS }>::new(
+        PROXY_RADIO_RESOURCES.init(ProxyRadioResources::new()),
+    );
+    radio_spawner.spawn(
+        phy_radio_task(
+            phy_runner,
+            EspRadio::new(Ieee802154::new(peripherals.IEEE802154)),
+        )
+        .expect("failed to create PHY radio task"),
+    );
+
+    // Run Matter-over-Thread forever (consumes the radio proxy, BT, RNG/ADC1,
+    // flash for fabric persistence, and the BOOT pin for factory reset).
     matter::run(
-        peripherals.IEEE802154,
+        radio_proxy,
         peripherals.BT,
         peripherals.RNG,
         peripherals.ADC1,
@@ -83,6 +109,12 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO9,
     )
     .await
+}
+
+/// Services the 802.15.4 PHY (TX/RX/ACK timing) on the interrupt executor.
+#[embassy_executor::task]
+async fn phy_radio_task(mut runner: PhyRadioRunner<'static>, radio: EspRadio<'static>) -> ! {
+    runner.run(radio, EmbassyTimeTimer).await
 }
 
 /// Blinks the builtin LED so the board shows a visible sign of life independent
