@@ -73,8 +73,9 @@ fragment of every message had to land first-shot. Fix: `FRAME_AR_OFFSET` 1→0,
 
 Post-fix hardware verification: `ackrx` counts hardware-confirmed ACKs (first time ever), the
 `rxab`/`txab` abort lockstep is gone, and **all probe phases (incl. full Matter payload and
-churn) register in 0.2–1.4s** — from 8–21s averages with 2–18% timeouts. Validation soak at
-90s deadlines ran clean before the pairing attempt (see `.bringup/offset-fix-soak.log`).
+churn) register in 0.2–1.4s** — from 8–21s averages with 2–18% timeouts. 50-min validation
+soak at 90s deadlines (`.bringup/offset-fix-soak.log`): **1,119 registrations, 0 failures,
+median 462ms, p99 741ms; 1,676/1,677 updates answered (99.94% vs 25% baseline).**
 
 Superseded (do not implement unless a new failure mode appears): OtMdns churn debounce,
 SRP retry densification, two-tier interrupt executors.
