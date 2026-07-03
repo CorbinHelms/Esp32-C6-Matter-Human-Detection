@@ -1,0 +1,17 @@
+--- a/openthread-sys/gen/builder.rs
++++ b/openthread-sys/gen/builder.rs
+@@ -201,7 +201,13 @@
+ 
+         config
+             .define("OT_THREAD_VERSION", "1.1")
+-            .define("OT_LOG_LEVEL", "NOTE")
++            // VENDORED PATCH: NOTE -> INFO for Matter bring-up diagnostics.
++            // The SRP client / MLE / MAC log almost everything at INFO; at NOTE
++            // a failing SRP registration is invisible. The Rust `otPlatLog`
++            // shim maps OT INFO -> log::debug!, so runtime visibility is gated
++            // by ESP_LOG="...,openthread=debug" (cheap to disable). Revert to
++            // NOTE for production (OT formats INFO strings unconditionally).
++            .define("OT_LOG_LEVEL", "INFO")
+             // Build BOTH device types so the prebuilt cache covers MTD and FTD.
+             // The actual archives shipped/linked are chosen by the umbrella
+             // target in our wrapper `CMakeLists.txt` and the `ftd`/`rcp`/`tcp`

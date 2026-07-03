@@ -33,8 +33,9 @@ extern crate alloc;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 /// Heap for the Matter stack (x509/crypto) and the radios. Matter needs a large
-/// heap; this matches the rs-matter-embassy Thread example.
-const HEAP_SIZE: usize = 100 * 1024;
+/// heap; the rs-matter-embassy Thread example uses 100KB — we add headroom for
+/// the deepened 802.15.4 RX queue (200 frames ≈ 26KB, see vendor/openthread).
+const HEAP_SIZE: usize = 128 * 1024;
 /// Reclaimable RAM region folded into the heap.
 const RECLAIMED_RAM: usize =
     memory_range!("DRAM2_UNINIT").end - memory_range!("DRAM2_UNINIT").start;
