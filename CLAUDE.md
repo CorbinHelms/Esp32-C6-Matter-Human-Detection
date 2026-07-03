@@ -58,36 +58,33 @@ espflash flash --chip esp32c6 --port /dev/ttyACM0 --partition-table partitions.c
 `.bringup/` (gitignored) holds the dataset hex + all attempt logs. The device was left running
 the probe overnight, logging to `.bringup/overnight-probe.log` — **check those stats first.**
 
-### OPEN: commissioning still fails at SRP-in-main-firmware
+### SOLVED #2: the FCF offset off-by-one (commit 298ddc3) — MAC retries never ran
 
-Three Google Home attempts (2026-07-02/03). Attempts 2–3 (fixed radio): full BLE interview ✓,
-AddNOC ✓, dataset delivered ✓, clean BLE→Thread handover ✓, 1-round attach ✓, **Google even
-establishes PASE over the operational Thread network** (operational reachability works!) — but
-the device's SRP registration times out through the ~120s fail-safe (code=28 per retry), Google
-never CASEs, fail-safe expires, fabric rolls back. Meanwhile the probe on the same radio
-registers fine — the remaining delta is above the radio. Leads, in order:
+The 2026-07-03 overnight soak (313 cycles) measured **25% SRP round-trip success**
+(4,982 sends → 1,254 responses) with `ackrx` pinned at 0, and disproved the OtMdns-churn
+hypothesis (churn phase D *out-performed* plain phase C, 88% vs 82%). The cause:
+`vendor/esp-radio/.../frame.rs` kept the C driver's length-prefixed buffer offsets while
+every Rust call site passes the PSDU with the length byte stripped — so `frame_is_ack_required`
+read the frame-version bit instead of the AR bit (false for every 2006 frame we send) and
+`frame_get_version` read the sequence number. **The driver never armed the ACK-wait, OpenThread
+was told every TX succeeded, and 802.15.4 MAC retransmission never ran at all** — every
+fragment of every message had to land first-shot. Fix: `FRAME_AR_OFFSET` 1→0,
+`FRAME_VERSION_OFFSET` 2→1 (see `patches/esp-radio-154-fixes.patch`).
 
-1. **OtMdns re-registration churn (prime suspect, probe phase D tests exactly this).**
-   rs-matter-embassy's `OtMdns::run_register` does an *immediate* `srp_remove_all(true)` +
-   re-register on every `wait_mdns()` notification — observed 2–3× within seconds of attach,
-   each clearing the in-flight SRP transaction. If phase D shows churn wedges/starves the
-   client → fix = debounce/dedupe in a vendored rs-matter-embassy (only re-register when the
-   service set actually changed).
-2. **Executor starvation** (partially addressed): PHY now runs on a Priority2 InterruptExecutor
-   (`ProxyRadio`/`PhyRadioRunner`, commit 8e62236), but OT's tasklets/alarms still share the
-   main executor with rs-matter's mbedtls (PASE/SPAKE2p grinds seconds per handshake; SRP
-   client timers+response processing freeze meanwhile). Escalation if needed: second
-   InterruptExecutor tier — PHY@P3(SWI2), whole `ot.run()`@P2(SWI1), rs-matter on thread.
-   (Careful: OT tasklets include SRP ECDSA signing — measure before/after.)
-3. **Ambient RF/server variance is real**: late-night probe runs needed 7–37s registrations
-   (vs 0.2–13s earlier) with several retries. The fail-safe gives ~90s post-attach; SRP retry
-   ladder only fits ~7 attempts. If 1+2 don't fully close it, densify retries (vendored
-   openthread-sys: `OPENTHREAD_CONFIG_SRP_CLIENT_MIN_RETRY_WAIT_INTERVAL` 1800→500ms).
+Post-fix hardware verification: `ackrx` counts hardware-confirmed ACKs (first time ever), the
+`rxab`/`txab` abort lockstep is gone, and **all probe phases (incl. full Matter payload and
+churn) register in 0.2–1.4s** — from 8–21s averages with 2–18% timeouts. Validation soak at
+90s deadlines ran clean before the pairing attempt (see `.bringup/offset-fix-soak.log`).
 
-Also observed (don't be confused by it): Google's pre-flow probe always arms the fail-safe
-120s → re-arms 1s → disarms → reconnects for the real flow. And after a failed attempt the
-stack stays in the Thread phase (no BLE re-advertising) with the PASE window eventually
-expiring — reboot the device before any new pairing attempt.
+Superseded (do not implement unless a new failure mode appears): OtMdns churn debounce,
+SRP retry densification, two-tier interrupt executors.
+
+Notes for pairing attempts: Google's pre-flow probe always arms the fail-safe 120s →
+re-arms 1s → disarms → reconnects for the real flow (not a failure). After a *failed* attempt
+the stack stays in the Thread phase (no BLE re-advertising) with the PASE window eventually
+expiring — reboot the device before any new pairing attempt. During attempts 2–3 Google
+established PASE **over the operational Thread network** (session ID 3 in the logs), so
+operational IP reachability was already proven pre-fix.
 
 ### Session/tooling notes (2026-07-03)
 
