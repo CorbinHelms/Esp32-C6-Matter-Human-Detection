@@ -1,0 +1,112 @@
+diff -ruN a/rs-matter/src/failsafe.rs b/rs-matter/src/failsafe.rs
+--- a/rs-matter/src/failsafe.rs	2026-07-03 18:46:57.512249395 -0500
++++ b/rs-matter/src/failsafe.rs	2026-07-03 18:46:57.513062188 -0500
+@@ -49,6 +49,7 @@
+         const ADD_ROOT_CERT_RECVD = 0x04;
+         const ADD_NOC_RECVD = 0x08;
+         const UPDATE_NOC_RECVD = 0x10;
++        const EXPIRY_GRACE_GRANTED = 0x20;
+     }
+ }
+ 
+@@ -88,6 +89,11 @@
+ /// `CHIP_DEVICE_CONFIG_FAILSAFE_EXPIRY_LENGTH_SEC` from the reference SDK.
+ pub const DEFAULT_FAILSAFE_EXPIRY_SECS: u16 = 60;
+ 
++/// One-shot grace extension applied when the fail-safe times out while a
++/// commissioning is in flight (`AddNOC` processed under this fail-safe
++/// context). Out-of-spec bring-up aid — see `check_failsafe_timeout`.
++pub const FAILSAFE_GRACE_SECS: u16 = 180;
++
+ pub struct FailSafe {
+     state: State,
+     secret_key: CanonPkcSecretKey,
+@@ -135,27 +141,58 @@
+         S: KvBlobStoreAccess,
+         N: NetworksAccess,
+     {
+-        if let State::Armed(ctx) = &self.state {
++        let expired = if let State::Armed(ctx) = &mut self.state {
+             let now = Instant::now();
+             if now
+                 >= ctx
+                     .armed_at
+                     .saturating_add(Duration::from_secs(ctx.timeout_secs as u64))
+             {
+-                // Timeout path: no caller exchange to preserve, so wipe
+-                // every PASE session along with the fabric / networks
+-                // rollback.
+-                self.expire(
+-                    fabrics,
+-                    sessions,
+-                    expire_sess_id,
+-                    networks,
+-                    kv,
+-                    mdns_notif,
+-                    notify_change,
+-                )?;
+-                return Ok(true);
++                // Bring-up aid (out-of-spec): if a fabric was added under this
++                // fail-safe (a real commissioning is in flight, not a pre-flow
++                // probe), grant a single grace extension instead of expiring.
++                // Google's controller has been observed reaching the device
++                // with CASE Sigma1 ~1s *after* its own 120s window in
++                // non-concurrent BLE→Thread commissioning; the grace keeps the
++                // staged fabric alive so the late CASE + CommissioningComplete
++                // can still land.
++                if ctx.flags.contains(NocFlags::ADD_NOC_RECVD)
++                    && !ctx.flags.contains(NocFlags::EXPIRY_GRACE_GRANTED)
++                {
++                    warn!(
++                        "Fail-Safe timeout for fabric {} with a commissioning in flight — extending once by {}s for a late commissioner",
++                        ctx.fab_idx, FAILSAFE_GRACE_SECS
++                    );
++
++                    ctx.flags |= NocFlags::EXPIRY_GRACE_GRANTED;
++                    ctx.armed_at = now;
++                    ctx.timeout_secs = FAILSAFE_GRACE_SECS;
++
++                    false
++                } else {
++                    true
++                }
++            } else {
++                false
+             }
++        } else {
++            false
++        };
++
++        if expired {
++            // Timeout path: no caller exchange to preserve, so wipe
++            // every PASE session along with the fabric / networks
++            // rollback.
++            self.expire(
++                fabrics,
++                sessions,
++                expire_sess_id,
++                networks,
++                kv,
++                mdns_notif,
++                notify_change,
++            )?;
++            return Ok(true);
+         }
+ 
+         Ok(false)
+diff -ruN a/rs-matter/src/transport.rs b/rs-matter/src/transport.rs
+--- a/rs-matter/src/transport.rs	2026-07-03 18:46:57.512318392 -0500
++++ b/rs-matter/src/transport.rs	2026-07-03 18:46:57.513131003 -0500
+@@ -196,7 +196,11 @@
+     }
+ 
+     /// Notify that the Matter mDNS services _might_ have changed.
+-    pub(crate) fn notify_mdns_changed(&self) {
++    ///
++    /// `pub` (upstream: `pub(crate)`) so user code can force a re-announce of
++    /// unchanged services, e.g. to refresh stale commissioner-side DNS-SD
++    /// caches during the commissioning window.
++    pub fn notify_mdns_changed(&self) {
+         self.mdns_changed.notify();
+     }
+ 

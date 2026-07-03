@@ -17,7 +17,7 @@ use core::pin::pin;
 
 use bt_hci::controller::ExternalController;
 use embassy_embedded_hal::adapter::BlockingAsync;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either};
 use esp_bootloader_esp_idf::partitions::{
     read_partition_table, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
 };
@@ -241,7 +241,10 @@ pub async fn run(
     }
 
     {
-        // Run Matter; concurrently watch the BOOT pin for a factory-reset request.
+        // Run Matter; concurrently watch the BOOT pin for a factory-reset
+        // request and nudge mDNS/SRP re-announcements during the pairing
+        // window.
+        let matter_api = stack.matter();
         let mut matter = pin!(stack.run(
             EmbassyThread::new(
                 SplitRadioDriver::new(radio_proxy, bt),
@@ -260,7 +263,25 @@ pub async fn run(
             boot_pin,
             InputConfig::default().with_pull(Pull::Down)
         )));
-        select(&mut matter, &mut wait_reset).coalesce().await.unwrap();
+        // Google's commissioner repeatedly missed the device's initial SRP
+        // registration and only CASE'd in at fail-safe expiry ±1s (stale
+        // DNS-SD caches from prior attempts refresh on record-TTL expiry —
+        // ~120s). Re-announcing the unchanged services makes the border
+        // router's advertising proxy re-push the records so controller caches
+        // converge while the fail-safe is still armed. 64 × 15s ≈ the 15-min
+        // pairing window; silent afterwards. Each nudge is one sub-second SRP
+        // update — negligible since the radio fixes (see patches/README.md).
+        let mut mdns_nudge = pin!(async {
+            for _ in 0..64 {
+                embassy_time::Timer::after_secs(15).await;
+                matter_api.transport().notify_mdns_changed();
+            }
+            core::future::pending::<Result<(), Error>>().await
+        });
+        select3(&mut matter, &mut wait_reset, &mut mdns_nudge)
+            .coalesce()
+            .await
+            .unwrap();
     }
 
     // Reached only when the user requested a factory reset. Use the full

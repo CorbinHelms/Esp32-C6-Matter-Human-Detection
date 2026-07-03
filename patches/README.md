@@ -1,9 +1,9 @@
 # Vendored dependency patches (M2 bring-up)
 
 `Cargo.toml` `[patch.crates-io]` overrides `openthread` 0.2.0,
-`openthread-sys` 0.2.1 and `esp-radio` 0.18.0 with local copies in `vendor/`
-(not committed — run `scripts/vendor.sh` to regenerate them from the cargo
-registry cache plus these diffs).
+`openthread-sys` 0.2.1, `esp-radio` 0.18.0 and `rs-matter` 0.2.0 with local
+copies in `vendor/` (not committed — run `scripts/vendor.sh` to regenerate
+them from the cargo registry cache plus these diffs).
 
 ## openthread-esp-radio-fixes.patch (the M2 fix)
 
@@ -56,6 +56,31 @@ typically <15s, across repeated cycles.
    logs from the ISR (ISR logging over the blocking USB-Serial-JTAG logger
    stalls the executor — the original `esp_radio=off` lesson). `srp-probe`
    prints deltas every 10s. Purely diagnostic.
+
+## rs-matter-failsafe-grace.patch
+
+Two commissioning-window aids for `rs-matter` 0.2.0, both dev-only (drop once
+Google's controller reliably completes inside its own window):
+
+1. **One-shot fail-safe grace extension** (`failsafe.rs`): if the fail-safe
+   times out while `AddNOC` was processed under it (a real commissioning in
+   flight — not Google's pre-flow 120s/1s arm-disarm probe), re-arm once for
+   180s instead of expiring. Observed on hardware (3/3 attempts,
+   `.bringup/attempt-{console,consoletest,quiet}.log`): Thread join + SRP
+   registration complete ~10s into Google's 120s fail-safe, but the
+   controller's CASE Sigma1 arrives at expiry ±1s — moments after the fabric
+   rollback — and dies with NoSharedTrustRoots ("Fabric Index mismatch").
+   The grace keeps the staged fabric alive so the late CASE +
+   CommissioningComplete can land. Spec-wise the fail-safe must expire at
+   the requested time; this trades that for pairing reliability on a
+   test-VID device.
+
+2. **`Transport::notify_mdns_changed()` made `pub`** (`transport.rs`) so the
+   firmware can re-trigger SRP/mDNS re-announcement every 15s during the
+   pairing window. The expiry-±1s CASE timing matches a controller resolving
+   a stale cached host AAAA (the host name is stable across attempts but the
+   Thread SLAAC address rotates per boot) until record-TTL expiry (120s);
+   re-announcing pushes fresh records so controller caches converge early.
 
 ## openthread-sys-log-level.patch
 

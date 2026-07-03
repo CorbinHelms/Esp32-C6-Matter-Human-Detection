@@ -66,6 +66,11 @@ openthread     = { path = "vendor/openthread" }
 openthread-sys = { path = "vendor/openthread-sys" }
 # esp-radio: ISR-safe 802.15.4 diagnostic counters (esp_radio::ieee802154::diag)
 esp-radio      = { path = "vendor/esp-radio" }
+# rs-matter: (a) one-shot fail-safe grace extension while a commissioning is in
+# flight — Google's CASE was observed arriving ~1s AFTER its own 120s fail-safe
+# window, right after the fabric rollback; (b) `notify_mdns_changed()` made pub
+# so the firmware can re-announce SRP/mDNS during the pairing window.
+rs-matter      = { path = "vendor/rs-matter" }
 
 [profile.dev]
 # Debug builds are too slow/large for the device; always optimize a little.

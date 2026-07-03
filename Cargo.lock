@@ -3278,8 +3278,6 @@ dependencies = [
 [[package]]
 name = "rs-matter"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e65740dac8653d785f53e8973ac3598d33e6466ece9e9df69d1b62c07c5b41a5"
 dependencies = [
  "aes",
  "bitflags 2.13.0",
