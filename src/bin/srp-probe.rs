@@ -53,9 +53,10 @@ const HEAP_SIZE: usize = 128 * 1024;
 const RECLAIMED_RAM: usize =
     memory_range!("DRAM2_UNINIT").end - memory_range!("DRAM2_UNINIT").start;
 
-/// Give each registration attempt the same budget a Matter commissioner's
-/// fail-safe would (Google armed 120s).
-const PHASE_DEADLINE: Duration = Duration::from_secs(120);
+/// Give each registration attempt the realistic post-attach budget inside a
+/// Matter commissioner's fail-safe (Google arms 120s; attach + BLE teardown
+/// eat ~30s of it).
+const PHASE_DEADLINE: Duration = Duration::from_secs(90);
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {

@@ -180,3 +180,26 @@
  /// IEEE 802.15.4 errors
  #[derive(Display, Debug, Clone, Copy, PartialEq, Eq)]
  #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+--- a/esp-radio/src/ieee802154/frame.rs
++++ b/esp-radio/src/ieee802154/frame.rs
+@@ -6,9 +6,18 @@
+ pub(crate) const FRAME_VERSION_1: u8 = 0x10; // IEEE 802.15.4 - 2006 & 2011
+ pub(crate) const FRAME_VERSION_2: u8 = 0x20; // IEEE 802.15.4 - 2015
+ 
+-const FRAME_AR_OFFSET: usize = 1;
++// VENDORED PATCH: these offsets were ported from the C driver, whose buffers
++// carry a leading length byte ([len][FCF0][FCF1]...). Every Rust call site
++// (raw.rs: tx paths use `TX_FRAME.add(1)`, rx path uses `&RX_BUFFER[1..]`)
++// passes the PSDU with the length byte already stripped, so the C offsets
++// read the wrong bytes: "ack required" read FCF byte 1 bit 0x20 (= the
++// frame-version-high bit → false for all 2006 frames → the driver never
++// awaited/verified ACKs and OpenThread never retransmitted anything), and
++// "frame version" read the sequence number. Corrected to PSDU-relative:
++// AR = FCF LSB (psdu[0]) bit 0x20; version = FCF MSB (psdu[1]) bits 0x30.
++const FRAME_AR_OFFSET: usize = 0;
+ const FRAME_AR_BIT: u8 = 0x20;
+-const FRAME_VERSION_OFFSET: usize = 2;
++const FRAME_VERSION_OFFSET: usize = 1;
+ const FRAME_VERSION_MASK: u8 = 0x30;
+ 
+ /// IEEE 802.15.4 MAC frame

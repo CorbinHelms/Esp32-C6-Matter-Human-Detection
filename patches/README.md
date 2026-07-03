@@ -32,14 +32,30 @@ Probe measurements (full Matter-sized 2-service SRP registration): before —
 1 success in 15+ attempts over ~20 min; after — registers in 0.6–37s,
 typically <15s, across repeated cycles.
 
-## esp-radio-154-diag.patch
+## esp-radio-154-fixes.patch
 
-ISR-safe atomic diagnostic counters for the 802.15.4 driver
-(`esp_radio::ieee802154::diag::snapshot()`): SFD/RxDone/queue events, ACK
-branch decisions, TX outcomes, RX/TX abort reasons, RX re-arms. Never logs
-from the ISR (ISR logging over the blocking USB-Serial-JTAG logger stalls
-the executor — the original `esp_radio=off` lesson). `srp-probe` prints
-deltas every 10s. Purely diagnostic; keep or drop.
+1. **`frame.rs` FCF offset off-by-one — the second root-cause fix.**
+   `frame_is_ack_required` / `frame_get_version` kept the C driver's
+   length-prefixed buffer offsets (`[len][FCF0][FCF1]…`), but every Rust
+   call site passes the PSDU with the length byte stripped. "ACK required"
+   therefore read FCF byte 1 bit 0x20 — the frame-version-high bit — which
+   is false for every 2006 frame the device transmits, so the driver never
+   armed the ACK-wait and OpenThread believed every TX succeeded:
+   **802.15.4 MAC retransmission never ran at all.** Measured impact: 25%
+   SRP round-trip success (4,982 sends → 1,254 responses overnight);
+   multi-fragment updates only survived if every fragment landed first-shot.
+   ("Frame version" likewise read the sequence number, causing the garbage
+   RX ack-branch decisions that made enhanced-ACK mode catastrophic.)
+   Fix: offsets 1→0 and 2→1 (PSDU-relative). Verified on hardware: `ackrx`
+   counts hardware-confirmed ACKs (previously always 0), the RX/TX abort
+   lockstep is gone, and SRP registrations complete in ~1.4s first-try.
+
+2. ISR-safe atomic diagnostic counters
+   (`esp_radio::ieee802154::diag::snapshot()`): SFD/RxDone/queue events, ACK
+   branch decisions, TX outcomes, RX/TX abort reasons, RX re-arms. Never
+   logs from the ISR (ISR logging over the blocking USB-Serial-JTAG logger
+   stalls the executor — the original `esp_radio=off` lesson). `srp-probe`
+   prints deltas every 10s. Purely diagnostic.
 
 ## openthread-sys-log-level.patch
 
