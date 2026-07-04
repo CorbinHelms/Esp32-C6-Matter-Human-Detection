@@ -12,14 +12,14 @@ Presence sensor (HLK-LD2410)**, exposing presence to **Google Home** as a **Matt
 Sensor over Thread**, for automations. Architecture and rationale are in [`README.md`](README.md);
 the design record is the approved plan referenced in the git history.
 
-## Status (on-hardware bring-up — updated 2026-07-03, late session)
+## Status (on-hardware bring-up — updated 2026-07-03 evening: **PAIRED & WORKING in Google Home**)
 
 | Stage | Code | Built | Hardware-verified |
 |------|------|-------|-------------------|
 | M0 scaffold + blink/log | `src/bin/main.rs`, `src/board.rs` | ✅ | ✅ |
 | M1 LD2410 sensor + debounce | `src/sensor.rs`, `src/presence.rs` | ✅ | ✅ full presence cycle → occupancy attr |
-| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | 🟡 radio root-cause FIXED & probe-verified; commissioning reaches PASE-over-Thread but still fails at in-context SRP — see below |
-| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ⬜ blocked by M2 |
+| M2 Matter Occupancy over Thread | `src/matter/{mod,occupancy}.rs` | ✅ | ✅ commissioned into Google Home 2026-07-03 18:55 (three root causes fixed — see below) |
+| M3 persistence + factory reset | `src/matter/mod.rs`, `partitions.csv` | ✅ | ✅ reboot → "already commissioned", rejoins as the same SRP host in ~4s; factory reset exercised repeatedly during re-pairing cycles |
 
 ## M2 state of play (READ THIS — supersedes all earlier M2 analysis)
 
@@ -86,6 +86,33 @@ the stack stays in the Thread phase (no BLE re-advertising) with the PASE window
 expiring — reboot the device before any new pairing attempt. During attempts 2–3 Google
 established PASE **over the operational Thread network** (session ID 3 in the logs), so
 operational IP reachability was already proven pre-fix.
+
+### SOLVED #3: Google's CASE arrived after its own fail-safe (commit d7c4509) — M2 COMPLETE
+
+With the radio fixed, re-pairing still failed 3/3 with a Matter-layer signature
+(`.bringup/attempt-{console,consoletest,quiet}.log`): fabric added + Thread joined + SRP
+registered ~10s into Google's 120s fail-safe, then Google's CASE Sigma1 landed at **expiry
+±1s** — moments after the fabric rollback — dying with "Fabric Index mismatch"
+(NoSharedTrustRoots). Best-evidence cause: controller-side stale DNS-SD cache — the host name
+is stable across attempts (f77f983/d6e0bf5) but the SLAAC address rotates per boot, and Google
+re-resolved only at record-TTL expiry (≈120s).
+
+Fix (both dev-only aids; rs-matter 0.2.0 is now the 4th vendored crate,
+`patches/rs-matter-failsafe-grace.patch`):
+1. **One-shot 180s fail-safe grace** when the timeout hits with `AddNOC` processed under it
+   (a real commissioning in flight; Google's pre-flow 120s/1s probe has no NOC and expires
+   normally) — a late CASE + CommissioningComplete land on a live fabric.
+2. **`Transport::notify_mdns_changed()` made pub** + the firmware re-announces SRP/mDNS every
+   15s × 64 from boot (≈ the pairing window), so controller caches converge early.
+
+Outcome: paired 2026-07-03 18:55 in ~15s flat (AddNOC → CommissioningComplete; the grace never
+fired — clean caches + re-announces made Google fast). Reboot test 18:58: "already
+commissioned", same SRP host re-registered in ~4s, Google controllers talking to the new
+address within a minute.
+
+**Pairing protocol (updated):** reboot the device (fresh 15-min window), remove any
+stale/offline entry of the device from Google Home first, and **don't cancel the app before
+~5 min** — the grace period means slow attempts complete late rather than fail.
 
 ### Session/tooling notes (2026-07-03)
 
