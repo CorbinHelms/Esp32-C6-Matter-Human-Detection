@@ -1,0 +1,305 @@
+<title>Presence Sensor — Setup Guide</title>
+<style>
+  :root {
+    --paper: #ffffff;
+    --bg: #f2f1ee;
+    --ink: #26282c;
+    --muted: #6b6d72;
+    --line: #d9d7d2;
+    --accent: #c2662a;
+    --accent-soft: #f4e3d5;
+    --panel: #f7f6f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1c20; --paper: #212327; --ink: #e6e5e1; --muted: #9a9ba0;
+      --line: #33363d; --accent: #d98a4e; --accent-soft: #3a2c20;
+      --panel: #26282d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1c20; --paper: #212327; --ink: #e6e5e1; --muted: #9a9ba0;
+    --line: #33363d; --accent: #d98a4e; --accent-soft: #3a2c20;
+    --panel: #26282d;
+  }
+  :root[data-theme="light"] {
+    --bg: #f2f1ee; --paper: #ffffff; --ink: #26282c; --muted: #6b6d72;
+    --line: #d9d7d2; --accent: #c2662a; --accent-soft: #f4e3d5;
+    --panel: #f7f6f3;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; padding: 24px 12px 48px;
+    font-family: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+    color: var(--ink); font-size: 13px; line-height: 1.45;
+  }
+  .screen-note {
+    max-width: 7.6in; margin: 0 auto 14px; text-align: center;
+    color: var(--muted); font-size: 12px;
+  }
+  .sheet {
+    background: var(--paper); max-width: 7.6in; margin: 0 auto 24px;
+    padding: 0.5in 0.55in; border: 1px solid var(--line); border-radius: 6px;
+  }
+  h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  .kicker {
+    font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; margin: 0 0 4px;
+  }
+  .lede { color: var(--muted); margin: 6px 0 0; max-width: 62ch; }
+  .rule { border: 0; border-top: 2px solid var(--ink); margin: 14px 0 16px; }
+  h2 {
+    font-size: 14px; margin: 0 0 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stepno {
+    flex: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: var(--paper);
+    font-size: 11px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .step { margin-bottom: 16px; }
+  .cols { display: flex; gap: 16px; align-items: flex-start; }
+  .cols > .txt { flex: 1 1 55%; }
+  .cols > figure { flex: 1 1 45%; margin: 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  ul, ol { margin: 4px 0 0; padding-left: 18px; }
+  li { margin-bottom: 3px; max-width: 60ch; }
+  li::marker { color: var(--accent); font-weight: 700; }
+  .callout {
+    background: var(--accent-soft); border-left: 3px solid var(--accent);
+    border-radius: 4px; padding: 8px 12px; margin: 10px 0; max-width: 66ch;
+  }
+  .callout strong { color: var(--accent); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px 14px; margin-top: 8px;
+  }
+  .code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap;
+  }
+  .bigcode {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 22px; letter-spacing: 0.12em; font-weight: 600;
+    padding: 6px 14px; border: 1.5px dashed var(--accent); border-radius: 6px;
+    display: inline-block; margin: 4px 0;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 10px 5px 0; vertical-align: top; }
+  th { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  tr + tr td { border-top: 1px solid var(--line); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  .foot {
+    margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 10.5px;
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  svg text { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; fill: var(--muted); }
+  svg .lbl { font-size: 9px; }
+  svg .body { fill: var(--panel); stroke: var(--ink); stroke-width: 1.2; }
+  svg .hi { fill: var(--accent); opacity: 0.85; }
+  svg .soft { fill: var(--accent-soft); }
+  svg .dash { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; fill: none; }
+  svg .thin { stroke: var(--muted); stroke-width: 1; fill: none; }
+  svg .arrow { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+
+  @media print {
+    :root {
+      --bg: #ffffff; --paper: #ffffff; --ink: #1c1d20; --muted: #55565a;
+      --line: #c9c8c4; --accent: #b35a20; --accent-soft: #f4e3d5;
+      --panel: #f3f2ef;
+    }
+    @page { size: letter; margin: 0.4in; }
+    body { padding: 0; font-size: 12px; }
+    .step { margin-bottom: 12px; }
+    .foot { margin-top: 10px; }
+    .bigcode { font-size: 18px; }
+    .panel { padding: 8px 12px; }
+    .screen-note { display: none; }
+    .sheet {
+      border: 0; border-radius: 0; padding: 0.1in 0;
+      max-width: none; margin: 0;
+    }
+    .sheet + .sheet { page-break-before: always; }
+  }
+</style>
+
+<p class="screen-note">This is a print-ready two-page guide &mdash; use your browser's Print (double-sided) to make the paper pamphlet.</p>
+
+<!-- ============================ PAGE 1 ============================ -->
+<section class="sheet">
+  <p class="kicker">Room presence sensor &middot; Matter over Thread</p>
+  <h1>It knows you're there. Here's how to set it up.</h1>
+  <p class="lede">A 24&nbsp;GHz mmWave radar that detects people &mdash; even sitting perfectly
+    still &mdash; and shows up in Google Home as an occupancy sensor you can use to start
+    automations. Hand-built firmware in Rust on an ESP32-C6; treat it as a friendly prototype.</p>
+  <hr class="rule">
+
+  <div class="step">
+    <h2><span class="stepno">1</span> Check what you need</h2>
+    <ul>
+      <li><strong>A Thread border router</strong> on your Wi-Fi: any of Nest Hub (2nd gen), Nest Hub Max, Nest Wifi Pro, or Google TV Streamer. No border router = it can't join.</li>
+      <li><strong>Google Home app</strong> on your phone, with Bluetooth on.</li>
+      <li><strong>USB-C power</strong> near the mounting spot (any phone charger).</li>
+    </ul>
+    <div class="callout"><strong>Before you pair:</strong> this is a development device (test
+      Matter IDs, not certified). Text me the Gmail address you use with Google Home first &mdash;
+      I need to add it to my developer project or the app will refuse to commission it.</div>
+  </div>
+
+  <div class="step">
+    <h2><span class="stepno">2</span> Load the sensor into the mount</h2>
+    <div class="cols">
+      <div class="txt">
+        <ol>
+          <li>Stick <strong>one layer of the foam tape</strong> flat on the pocket floor (the deepest inside face).</li>
+          <li>Hold the sensor <strong>radar side out</strong> (white antenna board faces you), USB-C connector toward the open slot.</li>
+          <li>Slide the board's edge <strong>under the wide lip first</strong>, then press the other edge in until it <strong>clicks past the two small tabs</strong>.</li>
+          <li>To remove: lift the tab edge over the tabs with a fingernail and tilt the board out.</li>
+        </ol>
+      </div>
+      <figure>
+        <svg viewBox="0 0 260 150" role="img" aria-label="Cross-section of the mount pocket showing insertion under the lip and past the snap tabs">
+          <!-- pocket cross-section: opening up -->
+          <path class="body" d="M30 135 L230 135 L230 55 L214 55 L214 119 L46 119 L46 55 L30 55 Z"/>
+          <!-- lip (left) -->
+          <path class="body" d="M30 55 L62 55 L62 64 L46 64 L46 70 L30 70 Z"/>
+          <!-- tab (right) -->
+          <path class="body" d="M230 55 L214 55 L214 62 L222 66 L230 66 Z"/>
+          <!-- foam layer -->
+          <rect class="soft" x="47" y="112" width="166" height="7"/>
+          <line class="thin" x1="47" y1="112" x2="213" y2="112"/>
+          <!-- board, tilted, entering -->
+          <g transform="rotate(-14 66 68)">
+            <rect class="hi" x="60" y="66" width="146" height="10" rx="2"/>
+            <rect class="body" x="88" y="76" width="96" height="22" rx="2"/>
+          </g>
+          <!-- rotate-in arrow -->
+          <path class="arrow" d="M196 34 A 60 60 0 0 1 216 52" />
+          <path class="hi" d="M216 52 L208 50 L214 43 Z"/>
+          <text class="lbl" x="30" y="46">lip &mdash; this edge in first</text>
+          <text class="lbl" x="176" y="24">press to click</text>
+          <text class="lbl" x="52" y="132" >foam tape layer on the floor</text>
+        </svg>
+        <figcaption>Radar board face out; the tabs hold its edge once it clicks.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <div class="step">
+    <h2><span class="stepno">3</span> Pick the spot</h2>
+    <div class="cols">
+      <div class="txt">
+        <ul>
+          <li><strong>Wedge mount:</strong> flat wall, about <strong>2.2&ndash;2.7&nbsp;m up</strong>, aimed into the room. It tilts the radar 45&deg; down.</li>
+          <li><strong>Corner mount:</strong> in the top corner of the room, near the ceiling; it aims diagonally down into the middle of the room.</li>
+          <li>The beam is wide (&plusmn;60&deg;) and reaches ~5&nbsp;m for a walking person, less for someone sitting still &mdash; face it toward where people actually are.</li>
+          <li>Avoid aiming at fans, big swaying plants, or through thin walls (radar sees through them a little).</li>
+          <li>The <strong>cable slot must face the floor</strong> so the cord hangs straight down.</li>
+        </ul>
+      </div>
+      <figure>
+        <svg viewBox="0 0 260 150" role="img" aria-label="Side view of a room showing the sensor mounted high with its beam aimed 45 degrees down">
+          <line class="thin" x1="20" y1="140" x2="250" y2="140"/>
+          <line class="thin" x1="20" y1="10" x2="20" y2="140"/>
+          <!-- mount wedge -->
+          <path class="hi" d="M20 34 L38 52 L20 52 Z"/>
+          <!-- beam -->
+          <path class="dash" d="M30 44 L150 140"/>
+          <path class="dash" d="M30 44 L246 118"/>
+          <path class="soft" d="M30 44 L150 140 L226 140 L246 118 Z" opacity="0.5"/>
+          <!-- person -->
+          <circle class="thin" cx="150" cy="106" r="6"/>
+          <path class="thin" d="M150 112 L150 128 M150 116 L141 122 M150 116 L159 122 M150 128 L143 140 M150 128 L157 140"/>
+          <text class="lbl" x="44" y="30">mounted ~2.2&ndash;2.7 m up</text>
+          <text class="lbl" x="174" y="100">aimed 45&deg; down</text>
+        </svg>
+        <figcaption>Aim the face at the living area, not along the wall.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>Presence sensor &mdash; setup guide &middot; page 1 of 2</span>
+    <span>continue on the back &rarr;</span>
+  </div>
+</section>
+
+<!-- ============================ PAGE 2 ============================ -->
+<section class="sheet">
+  <div class="step">
+    <h2><span class="stepno">4</span> Stick it to the wall</h2>
+    <div class="cols">
+      <div class="txt">
+        <ul>
+          <li>Wipe the wall with isopropyl (or at least a dry cloth) and let it dry.</li>
+          <li>Foam tape goes <strong>only on the raised strips</strong>: the two vertical rails on the wedge mount's back, or the flat pad at the end of each wing on the corner mount. The rest of the back is deliberately recessed and never touches the wall.</li>
+          <li>Press firmly for <strong>30 seconds, right over the taped areas</strong> &mdash; on the corner mount press near the wing ends, not the middle.</li>
+          <li>The mount weighs ~20&nbsp;g with the sensor; good foam tape holds it on textured walls and slightly out-of-square corners (the wings flex a little on purpose).</li>
+        </ul>
+      </div>
+      <figure>
+        <svg viewBox="0 0 280 140" role="img" aria-label="Backs of both mounts with the tape areas highlighted">
+          <!-- wedge back -->
+          <rect class="body" x="16" y="22" width="80" height="94" rx="8"/>
+          <rect class="hi" x="22" y="28" width="15" height="82" rx="4"/>
+          <rect class="hi" x="75" y="28" width="15" height="82" rx="4"/>
+          <text class="lbl" x="18" y="134">wedge: tape the two rails</text>
+          <!-- corner back: two wings, apex gap between them -->
+          <path class="body" d="M198 26 L264 48 L264 114 L198 92 Z"/>
+          <path class="body" d="M182 26 L116 48 L116 114 L182 92 Z"/>
+          <path class="hi" d="M238 70 L262 78 L262 110 L238 102 Z"/>
+          <path class="hi" d="M118 70 L142 78 L142 110 L118 102 Z"/>
+          <line class="dash" x1="190" y1="24" x2="190" y2="94"/>
+          <text class="lbl" x="136" y="12">corner gap is intentional</text>
+          <line class="thin" x1="190" y1="15" x2="190" y2="22"/>
+          <text class="lbl" x="152" y="134">corner: tape each wing end</text>
+        </svg>
+        <figcaption>Orange = where the tape goes. Cable slot points down.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <div class="step">
+    <h2><span class="stepno">5</span> Power it &amp; pair with Google Home</h2>
+    <ol>
+      <li>Route the USB-C cable out of the bottom slot and plug it in. A slow-blinking LED means it's running; a fresh 15-minute pairing window opens at every power-up.</li>
+      <li>In the Google Home app: <strong>Devices &rarr; Add &rarr; Matter-enabled device</strong>.</li>
+      <li>When asked for a code, choose <em>Set up without QR code</em> and enter:</li>
+    </ol>
+    <p style="margin:4px 0 4px 18px"><span class="bigcode">3497-011-2332</span></p>
+    <ol start="4">
+      <li>Accept the "device isn't certified" warning (see the note on page&nbsp;1), pick your Thread network, and give it a room.</li>
+      <li><strong>Be patient and don't cancel</strong> &mdash; slow attempts finish late rather than fail; give it up to 5 minutes before retrying.</li>
+      <li>If a retry is needed: unplug/replug the sensor first (fresh pairing window), and delete any half-added entry from Google Home.</li>
+    </ol>
+  </div>
+
+  <div class="step">
+    <h2><span class="stepno">6</span> Use it</h2>
+    <p style="margin:0 0 4px; max-width: 66ch;">It appears as an <strong>occupancy sensor</strong>. In Google Home automations, use the
+    starter <em>&ldquo;Occupancy &rarr; Occupied / Unoccupied&rdquo;</em> &mdash; lights on when someone's in the room,
+    off a bit after it empties. It flips to Occupied within a second or two of someone entering and clears
+    several seconds after the room is truly empty (radar + a hold time, so it doesn't flicker).</p>
+  </div>
+
+  <div class="panel">
+    <table>
+      <tr><th>Problem</th><th>Try this</th></tr>
+      <tr><td>Won't pair</td><td>Power-cycle the sensor, delete stale entries in Google Home, retry and wait the full 5 minutes. Confirm your Gmail is on the developer project.</td></tr>
+      <tr><td>Paired but "offline"</td><td>Check the border router (Nest Hub etc.) is online; power-cycle the sensor &mdash; it rejoins in a few seconds.</td></tr>
+      <tr><td>Occupied when empty</td><td>Fan, curtain, or a big plant in the beam &mdash; re-aim it, or move it away from the disturbance.</td></tr>
+      <tr><td>Start over completely</td><td>Pop the sensor out of the mount, hold the tiny <strong>BOOT</strong> button 3+ seconds while powered: factory reset, then re-pair.</td></tr>
+    </table>
+  </div>
+
+  <div class="foot">
+    <span>Questions / weirdness: tell Corbin &mdash; that's the "testing" part.</span>
+    <span>Rust + Matter + Thread on ESP32-C6 &middot; page 2 of 2</span>
+  </div>
+</section>
