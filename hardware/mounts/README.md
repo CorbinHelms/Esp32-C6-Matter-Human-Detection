@@ -12,11 +12,12 @@ the **top edge slides under the rigid lip first**, then the bottom edge clicks
 past two chamfered tabs. The bottom wall has a 10 mm slot for the USB-C cable —
 install with the slot facing **down** so the cable hangs toward the floor.
 
-**Before snapping the stack in, put a ~3–5 mm foam pad (or a few stacked layers
-of the mounting tape) on the pocket floor.** The pocket registers only the
-front (radar) board's face; the pad preloads the stack forward against the
-lip/tabs regardless of your header height, and swallows the USB-C connector
-bump on the back of the XIAO.
+**Before snapping the stack in, put one layer of the foam mounting tape
+(~1 mm) on the pocket floor.** The cavity is sized to the measured stack
+depth (8.77 mm to the USB-C shell, the deepest point on the back) plus
+~0.7 mm of insertion clearance; the tape layer takes up that clearance and
+preloads the front (radar) board's face against the lip/tabs so nothing
+rattles.
 
 ## Designed for imperfect walls
 

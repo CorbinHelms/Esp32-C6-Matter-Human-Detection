@@ -11,11 +11,11 @@
 # Sensor stack facts (Seeed datasheet/wiki):
 #   mmWave board (front, radar faces out): 18 x 22 mm
 #   XIAO ESP32-C6 (rear): 21 x 17.8 mm, USB-C protrudes from one short edge
-#   Stack depth (front face -> back of XIAO incl. headers) is not published
-#   (~12-16 mm depending on header height), so the pocket only registers the
-#   FRONT board: a rigid lip on the top edge + two snap tabs on the bottom
-#   edge hold its face; a foam pad on the pocket floor preloads the stack
-#   forward (see README).
+#   Stack depth (front face -> back), measured on the real assembly:
+#   ~8.77 mm to the USB-C shell (the deepest point), ~7.61 mm excluding it.
+#   The pocket registers the FRONT board: a rigid lip on the top edge + two
+#   snap tabs on the bottom edge hold its face; one ~1 mm layer of foam tape
+#   on the floor preloads the stack forward (see README).
 
 import FreeCAD as App
 import Part
@@ -30,18 +30,23 @@ S2 = math.sqrt(2) / 2
 # ---- pocket parameters (local frame: x = board width, y = board length,
 # ---- z = sensor aim axis, z=0 at the outer back face) ----
 BOARD_W, BOARD_L = 18.0, 22.0
+STACK_D = 8.8                  # measured stack depth incl. USB-C shell (8.77)
 CLR = 0.3                      # per-side clearance around the front board
 WALL = 2.5
 FLOOR = 3.0
-CAV_D = 13.5                   # cavity depth, floor -> front rim
+LIP_W, LIP_OVER, LIP_T = 12.0, 1.5, 1.5   # rigid lip, top edge
+TAB_W, TAB_OVER, TAB_T = 3.0, 1.0, 1.5    # snap tabs, bottom edge
+# The lip/tabs hold the front face TAB_T below the rim; rotating the stack in
+# sweeps its top-back corner to TAB_T + STACK_D deep, so the cavity needs that
+# plus working clearance. The leftover axial play is taken up by one layer of
+# foam tape on the floor.
+CAV_D = STACK_D + TAB_T + 0.7  # cavity depth, floor -> front rim (11.0)
 CAV_W = BOARD_W + 2 * CLR      # 18.6
 CAV_L = BOARD_L + 2 * CLR      # 22.6
 POC_W = CAV_W + 2 * WALL       # 23.6
 POC_L = CAV_L + 2 * WALL       # 27.6
-POC_H = FLOOR + CAV_D          # 16.5
+POC_H = FLOOR + CAV_D          # 14.0
 SLOT_W = 10.0                  # USB-C cable slot in the bottom (short) wall
-LIP_W, LIP_OVER, LIP_T = 12.0, 1.5, 1.5   # rigid lip, top edge
-TAB_W, TAB_OVER, TAB_T = 3.0, 1.0, 1.5    # snap tabs, bottom edge
 
 # Imperfect-wall forgiveness: everything is recessed RECESS off the wall
 # planes except small contact lands (rails / pads), so texture high spots and
