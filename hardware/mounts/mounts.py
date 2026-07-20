@@ -48,7 +48,7 @@ CAV_L = BOARD_L + 2 * CLR      # 22.6
 POC_W = CAV_W + 2 * WALL       # 23.6
 POC_L = CAV_L + 2 * WALL       # 27.6
 POC_H = FLOOR + CAV_D          # 14.0
-SLOT_W = 10.0                  # USB-C cable slot in the bottom (short) wall
+SLOT_W = 12.0                  # USB-C cable slot in the bottom (short) wall
 
 # Imperfect-wall forgiveness: everything is recessed RECESS off the wall
 # planes except small contact lands (rails / pads), so texture high spots and
@@ -132,13 +132,13 @@ def make_pocket(pro=False):
         (POC_W - lip_w) / 2, lip_w)
     solid = solid.fuse(lip)
 
-    # Two chamfered snap tabs on the bottom edge, flanking the slot.
+    # Two chamfered snap tabs on the bottom edge, flush with the slot edges.
     tab_pts = [(WALL, POC_H),
                (WALL, POC_H - TAB_T),
                (WALL + TAB_OVER, POC_H - TAB_T),
                (WALL + TAB_OVER, POC_H - TAB_T + 0.4),
                (WALL + 0.2, POC_H)]
-    for x0 in (WALL + 0.5, POC_W - WALL - 0.5 - TAB_W):
+    for x0 in ((POC_W - SLOT_W) / 2 - TAB_W, (POC_W + SLOT_W) / 2):
         solid = solid.fuse(yz_profile_solid(tab_pts, x0, TAB_W))
 
     return solid.removeSplitter()

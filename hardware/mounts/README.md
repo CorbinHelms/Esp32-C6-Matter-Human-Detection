@@ -16,7 +16,7 @@ a wider retention lip for a cleaner front frame.
 
 Both share the same snap-in pocket: the sensor stack drops in radar-face-out,
 the **top edge slides under the rigid lip first**, then the bottom edge clicks
-past two chamfered tabs. The bottom wall has a 10 mm slot for the USB-C cable —
+past two chamfered tabs. The bottom wall has a 12 mm slot for the USB-C cable —
 install with the slot facing **down** so the cable hangs toward the floor.
 
 **Before snapping the stack in, put one layer of the foam mounting tape
