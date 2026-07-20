@@ -70,7 +70,12 @@ pamphlet (`pamphlet-template.html` is the template):
 
 ```sh
 scripts/provision.py                 # plug the new board in first
+scripts/provision_gui.py             # same thing with buttons
 ```
+
+The GUI wraps the CLI: pick the port, hit **Provision new unit**, watch the
+log; on success it shows the unit's code + QR with an *Open pamphlet PDF*
+button, and lists previous units (open / re-render).
 
 That generates spec-valid random codes, builds the firmware with them baked
 in (`MATTER_PASSCODE` / `MATTER_DISCRIMINATOR` env vars, see
