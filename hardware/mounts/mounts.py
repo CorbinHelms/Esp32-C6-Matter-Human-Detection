@@ -3,10 +3,12 @@
 # Run inside FreeCAD (GUI or freecadcmd):
 #   OUT_DIR = "<this directory>"; exec(open(OUT_DIR + "/mounts.py").read())
 #
-# Produces:
-#   wall-mount-45.stl   flat-wall wedge, sensor tilted 45 deg down
-#   corner-mount-45.stl corner mount, aim = corner bisector tilted 45 deg down
-#   mounts.FCStd        both solids for inspection
+# Produces two styling variants of each mount:
+#   wall-mount-45.stl        flat-wall wedge, sensor tilted 45 deg down
+#   corner-mount-45.stl      corner mount, aim = corner bisector tilted 45 deg down
+#   wall-mount-45-pro.stl    same geometry, production trim (rounded + chamfered)
+#   corner-mount-45-pro.stl  same geometry, production trim
+#   mounts.FCStd             all four solids for inspection
 #
 # Sensor stack facts (Seeed datasheet/wiki):
 #   mmWave board (front, radar faces out): 18 x 22 mm
@@ -54,6 +56,13 @@ SLOT_W = 10.0                  # USB-C cable slot in the bottom (short) wall
 # their flat top face, which keeps every recess face vertical (no bridges).
 RECESS = 1.2                   # stand-off of the non-contact back surfaces
 
+# ---- production ("pro") trim: same geometry, softened cosmetics ----
+POCKET_R = 3.0                 # pocket body corner rounding
+RIM_CH = 1.0                   # chamfer around the front rim
+PLATE_R = 5.0                  # wall-mount plate corner rounding
+WING_R = 6.0                   # corner-mount wing outer-end rounding
+LIP_W_PRO = 16.0               # wider lip = cleaner front frame
+
 # ---- flat-wall wedge parameters (global: wall = y=0 plane, +y out, +z up) --
 PLATE_W, PLATE_T = 40.0, 3.0
 WEDGE_STANDOFF = 9.0           # wall clearance at the pocket's lower back edge
@@ -70,6 +79,21 @@ CORNER_RELIEF = 10.0           # apex cut-back: no material where x + y < this
 PAD_LEN = 20.0                 # wall-contact pads at the outer end of each wing
 
 
+def edges_along(shape, axis, where=None):
+    """Straight edges of `shape` parallel to `axis`, optionally filtered by a
+    predicate on the edge's center of mass."""
+    out = []
+    for e in shape.Edges:
+        if e.Curve.TypeId != "Part::GeomLine":
+            continue
+        t = e.tangentAt(e.FirstParameter)
+        if abs(abs(t.dot(axis)) - 1) > 1e-9:
+            continue
+        if where is None or where(e.CenterOfMass):
+            out.append(e)
+    return out
+
+
 def yz_profile_solid(pts, x0, width):
     """Extrude a closed y-z polygon (list of (y, z)) from x0 along +x."""
     poly = [App.Vector(x0, y, z) for (y, z) in pts]
@@ -78,9 +102,15 @@ def yz_profile_solid(pts, x0, width):
     return face.extrude(App.Vector(width, 0, 0))
 
 
-def make_pocket():
+def make_pocket(pro=False):
     """Snap-in pocket solid in local coordinates."""
     outer = Part.makeBox(POC_W, POC_L, POC_H)
+    if pro:
+        outer = outer.makeFillet(POCKET_R, edges_along(outer, App.Vector(0, 0, 1)))
+        rim = [f for f in outer.Faces
+               if isinstance(f.Surface, Part.Plane)
+               and abs(f.CenterOfMass.z - POC_H) < 1e-9]
+        outer = outer.makeChamfer(RIM_CH, rim[0].Edges)
     cavity = Part.makeBox(CAV_W, CAV_L, CAV_D + 1,
                           App.Vector(WALL, WALL, FLOOR))
     solid = outer.cut(cavity)
@@ -91,6 +121,7 @@ def make_pocket():
     solid = solid.cut(slot)
 
     # Rigid lip over the top edge of the board (insert this edge first).
+    lip_w = LIP_W_PRO if pro else LIP_W
     lip_y = WALL + CAV_L                     # top wall inner face
     lip = yz_profile_solid(
         [(lip_y, POC_H),
@@ -98,7 +129,7 @@ def make_pocket():
          (lip_y - LIP_OVER + 0.5, POC_H - LIP_T),
          (lip_y - LIP_OVER, POC_H - LIP_T + 0.5),
          (lip_y - LIP_OVER, POC_H)],
-        (POC_W - LIP_W) / 2, LIP_W)
+        (POC_W - lip_w) / 2, lip_w)
     solid = solid.fuse(lip)
 
     # Two chamfered snap tabs on the bottom edge, flanking the slot.
@@ -113,8 +144,12 @@ def make_pocket():
     return solid.removeSplitter()
 
 
-def back_face():
+def back_face(pro=False):
     """The pocket's outer back rectangle (local z=0), as a face."""
+    if pro:
+        slab = Part.makeBox(POC_W, POC_L, 1)
+        slab = slab.makeFillet(POCKET_R, edges_along(slab, App.Vector(0, 0, 1)))
+        return [f for f in slab.Faces if abs(f.CenterOfMass.z) < 1e-9][0]
     pts = [App.Vector(0, 0, 0), App.Vector(POC_W, 0, 0),
            App.Vector(POC_W, POC_L, 0), App.Vector(0, POC_L, 0),
            App.Vector(0, 0, 0)]
@@ -133,21 +168,24 @@ def placed(shape, cols, origin):
     return s
 
 
-def make_wall_mount(pocket):
+def make_wall_mount(pro=False):
     # local x -> -X, local y -> up-out, local z (aim) -> out-down at 45 deg
     cols = (App.Vector(-1, 0, 0),
             App.Vector(0, S2, S2),
             App.Vector(0, S2, -S2))
     origin = App.Vector((PLATE_W + POC_W) / 2, WEDGE_STANDOFF, WEDGE_LIFT)
 
-    pock = placed(pocket, cols, origin)
-    back = placed(back_face(), cols, origin)
+    pock = placed(make_pocket(pro), cols, origin)
+    back = placed(back_face(pro), cols, origin)
 
     # Fill between the tilted back face and the wall plane.
     fill = back.extrude(App.Vector(0, -(WEDGE_STANDOFF + POC_L * S2 + 1), 0))
     fill = fill.common(Part.makeBox(200, 200, 200, App.Vector(-50, 0, -50)))
 
     plate = Part.makeBox(PLATE_W, PLATE_T, PLATE_H)
+    if pro:
+        # round the plate's silhouette corners (edges running along y)
+        plate = plate.makeFillet(PLATE_R, edges_along(plate, App.Vector(0, 1, 0)))
     solid = plate.fuse(fill).fuse(pock)
 
     # Recess the wall side between the two tape rails so a texture high spot
@@ -158,7 +196,7 @@ def make_wall_mount(pocket):
     return solid.removeSplitter(), App.Vector(0, S2, -S2)
 
 
-def make_corner_mount(pocket):
+def make_corner_mount(pro=False):
     # aim = corner bisector tilted 45 deg down
     aim = App.Vector(0.5, 0.5, -S2)
     cols = (App.Vector(-S2, S2, 0),        # local x, horizontal
@@ -168,8 +206,8 @@ def make_corner_mount(pocket):
     center = bis * CORNER_OFFSET + App.Vector(0, 0, CORNER_LIFT)
     origin = center - cols[0] * (POC_W / 2)
 
-    pock = placed(pocket, cols, origin)
-    back = placed(back_face(), cols, origin)
+    pock = placed(make_pocket(pro), cols, origin)
+    back = placed(back_face(pro), cols, origin)
 
     # Fill from the tilted back face horizontally into the corner,
     # trimmed to the two walls (its flat top ends up at z = WING_H).
@@ -178,6 +216,12 @@ def make_corner_mount(pocket):
 
     wing_x = Part.makeBox(WING_T, WING_LEN, WING_H)
     wing_y = Part.makeBox(WING_LEN, WING_T, WING_H)
+    if pro:
+        # round each wing's outer-end corners (edges across the thickness)
+        wing_x = wing_x.makeFillet(WING_R, edges_along(
+            wing_x, App.Vector(1, 0, 0), lambda c: c.y > WING_LEN - 1))
+        wing_y = wing_y.makeFillet(WING_R, edges_along(
+            wing_y, App.Vector(0, 1, 0), lambda c: c.x > WING_LEN - 1))
     solid = wing_x.fuse(wing_y).fuse(fill).fuse(pock)
 
     # Apex relief: cut back everything within x + y < CORNER_RELIEF so the
@@ -219,25 +263,29 @@ def check(name, solid, aim):
           % (name, solid.Volume, bb.XLength, bb.YLength, bb.ZLength))
 
 
-pocket = make_pocket()
-wall_mount, wall_aim = make_wall_mount(pocket)
-corner_mount, corner_aim = make_corner_mount(pocket)
-check("wall-mount-45", wall_mount, wall_aim)
-check("corner-mount-45", corner_mount, corner_aim)
+solids = {}
+for pro in (False, True):
+    sfx = "-pro" if pro else ""
+    for label, maker in (("wall-mount-45", make_wall_mount),
+                         ("corner-mount-45", make_corner_mount)):
+        solid, aim = maker(pro)
+        check(label + sfx, solid, aim)
+        solids[label + sfx] = solid
 
 if "mounts" in App.listDocuments():
     App.closeDocument("mounts")
 doc = App.newDocument("mounts")
-for label, solid in (("wall_mount_45", wall_mount),
-                     ("corner_mount_45", corner_mount)):
-    obj = doc.addObject("Part::Feature", label)
+OFFSETS = {"wall-mount-45": (0, 0), "corner-mount-45": (70, 0),
+           "wall-mount-45-pro": (0, 90), "corner-mount-45-pro": (70, 90)}
+for label, solid in solids.items():
+    obj = doc.addObject("Part::Feature", label.replace("-", "_"))
     obj.Shape = solid
-doc.getObject("corner_mount_45").Placement.Base = App.Vector(70, 0, 0)
+    dx, dy = OFFSETS[label]
+    obj.Placement.Base = App.Vector(dx, dy, 0)
 doc.recompute()
 doc.saveAs(os.path.join(OUT, "mounts.FCStd"))
 
-for label, solid in (("wall-mount-45", wall_mount),
-                     ("corner-mount-45", corner_mount)):
+for label, solid in solids.items():
     mesh = MeshPart.meshFromShape(Shape=solid, LinearDeflection=0.08,
                                   AngularDeflection=math.radians(20),
                                   Relative=False)

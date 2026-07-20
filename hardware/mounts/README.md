@@ -6,6 +6,13 @@ Two tape-on mounts that aim the presence sensor 45° downward:
 |------|---------------|-----|
 | `wall-mount-45.stl` | flat wall, mounted high | straight out, tilted 45° down |
 | `corner-mount-45.stl` | 90° wall corner, near the ceiling | along the corner bisector (45° to each wall), tilted 45° down |
+| `wall-mount-45-pro.stl` | same as wall mount | production trim — print this one to give away |
+| `corner-mount-45-pro.stl` | same as corner mount | production trim — print this one to give away |
+
+The `-pro` variants are geometrically identical (same pocket, retention,
+recesses, pads, print orientation) with consumer-product cosmetics: rounded
+plate/wing corners, radiused pocket body, a chamfer around the front rim, and
+a wider retention lip for a cleaner front frame.
 
 Both share the same snap-in pocket: the sensor stack drops in radar-face-out,
 the **top edge slides under the rigid lip first**, then the bottom edge clicks
