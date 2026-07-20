@@ -36,18 +36,20 @@ STACK_D = 8.8                  # measured stack depth incl. USB-C shell (8.77)
 CLR = 0.3                      # per-side clearance around the front board
 WALL = 2.5
 FLOOR = 3.0
-LIP_W, LIP_OVER, LIP_T = 12.0, 1.5, 1.5   # rigid lip, top edge
-TAB_W, TAB_OVER, TAB_T = 3.0, 1.0, 1.5    # snap tabs, bottom edge
+LIP_W, LIP_OVER = 12.0, 1.5    # rigid lip, top edge
+TAB_W, TAB_OVER = 3.0, 1.0     # snap tabs, bottom edge
+LIP_T = TAB_T = 2.0            # lip/tab height; both must stay equal — they
+                               # jointly hold the board face TAB_T below the rim
 # The lip/tabs hold the front face TAB_T below the rim; rotating the stack in
 # sweeps its top-back corner to TAB_T + STACK_D deep, so the cavity needs that
 # plus working clearance. The leftover axial play is taken up by one layer of
 # foam tape on the floor.
-CAV_D = STACK_D + TAB_T + 0.7  # cavity depth, floor -> front rim (11.0)
+CAV_D = STACK_D + TAB_T + 0.7  # cavity depth, floor -> front rim (11.5)
 CAV_W = BOARD_W + 2 * CLR      # 18.6
 CAV_L = BOARD_L + 2 * CLR      # 22.6
 POC_W = CAV_W + 2 * WALL       # 23.6
 POC_L = CAV_L + 2 * WALL       # 27.6
-POC_H = FLOOR + CAV_D          # 14.0
+POC_H = FLOOR + CAV_D          # 14.5
 SLOT_W = 12.0                  # USB-C cable slot in the bottom (short) wall
 
 # Imperfect-wall forgiveness: everything is recessed RECESS off the wall
@@ -75,7 +77,10 @@ WING_LEN, WING_T = 55.0, 3.0
 CORNER_OFFSET = 15.0           # back lower-edge center, along the bisector
 CORNER_LIFT = 16.0             # height (z) of that edge
 WING_H = CORNER_LIFT + POC_L * S2  # wings flush with the fill's flat top
-CORNER_RELIEF = 10.0           # apex cut-back: no material where x + y < this
+CABLE_GAP = 12.0               # clear opening between the wing edges at the apex
+                               # (the USB-C cable routes vertically in the corner)
+CORNER_RELIEF = 2 * WING_T + CABLE_GAP * S2  # apex cut-back (~14.5): no
+                               # material where x + y < this
 PAD_LEN = 20.0                 # wall-contact pads at the outer end of each wing
 
 

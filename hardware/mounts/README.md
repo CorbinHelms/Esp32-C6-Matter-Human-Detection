@@ -33,8 +33,10 @@ texture high spots and corner-mud buildup can't rock the mount:
 
 - **Wall mount:** two full-height 9 mm tape **rails** at the left/right edges;
   the middle of the back is recessed 1.2 mm.
-- **Corner mount:** the apex is **cut back** — nothing comes within ~7 mm of
+- **Corner mount:** the apex is **cut back** — nothing comes within ~10 mm of
   the corner line, clearing corner bead radius and joint-compound buildup.
+  The opening between the wing edges is a **12 mm cable channel**: the USB-C
+  cable can route vertically along the corner, tucked behind the mount.
   Each 55 mm wing contacts its wall only through a 20 mm **pad at the outer
   end** (past the typical mud flare); the wing span between pad and body is
   recessed and thinned, so it flexes a degree or two and both pads still seat
