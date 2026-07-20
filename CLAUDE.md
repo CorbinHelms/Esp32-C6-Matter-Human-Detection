@@ -218,8 +218,10 @@ Wifi Pro, or Google TV Streamer 4K).
 - Target: `riscv32imac-unknown-none-elf`, stable Rust. Flashed image ≈ 1.7 MB.
 - Pins (`src/board.rs`): LED `GPIO15`; sensor UART1 RX `GPIO2`/TX `GPIO21` @ 256000 8N1; presence
   fallback `GPIO1`; BOOT/factory-reset `GPIO9`.
-- Matter identity (`src/matter/mod.rs`): VID `0xFFF1`, PID `0x8001`, discriminator `3840`, passcode
-  `20202021`. **Dev-only** (no OTA, not shippable).
+- Matter identity (`src/matter/mod.rs`): VID `0xFFF1`, PID `0x8001`; passcode/discriminator default
+  to the test values (`20202021`/`3840`) but are overridable at build time via `MATTER_PASSCODE` /
+  `MATTER_DISCRIMINATOR` env vars — `scripts/provision.py` uses that to flash per-unit codes and
+  generate a per-unit pamphlet (`hardware/units/`). **Dev-only** (no OTA, not shippable).
 - Tuning knobs: `HOLD_MS` (`src/sensor.rs`), `HEAP_SIZE` (`src/bin/main.rs`), `BUMP_SIZE`
   (`src/matter/mod.rs`), `partitions.csv` (5 MB app + 256 KB NVS).
 - `rs-matter-embassy` is git-pinned in `Cargo.toml` to rev `efef8b70b64178a8f8d1460d02ebb6fa146d2d95`

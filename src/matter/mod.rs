@@ -33,13 +33,14 @@ use rs_matter_embassy::matter::crypto::{default_crypto, Crypto};
 use rs_matter_embassy::matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter_embassy::matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter_embassy::matter::dm::devices::test::{
-    DAC_PRIVKEY, TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET,
+    DAC_PRIVKEY, TEST_DEV_ATT, TEST_DEV_DET,
 };
 use rs_matter_embassy::matter::dm::{
     Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
 };
 use rs_matter_embassy::matter::error::Error;
 use rs_matter_embassy::matter::persist::KvBlobStore;
+use rs_matter_embassy::matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
@@ -137,6 +138,34 @@ const BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
     ..TEST_DEV_DET
 };
 
+/// Compile-time decimal parse for the provisioning env overrides below.
+const fn parse_env_u32(s: Option<&str>, default: u32) -> u32 {
+    let Some(s) = s else { return default };
+    let b = s.as_bytes();
+    assert!(!b.is_empty(), "empty provisioning env var");
+    let mut v: u32 = 0;
+    let mut i = 0;
+    while i < b.len() {
+        assert!(b[i].is_ascii_digit(), "provisioning env vars are decimal");
+        v = v * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    v
+}
+
+/// Per-unit commissioning data. `scripts/provision.py` bakes a unique
+/// passcode + discriminator into each flashed board via these env vars and
+/// prints the matching QR / manual pairing code on that unit's pamphlet.
+/// Without them (plain `cargo build`) the defaults below are the rs-matter
+/// test values (`TEST_DEV_COMM`): passcode 20202021, discriminator 3840.
+const COMM_PASSCODE: u32 = parse_env_u32(option_env!("MATTER_PASSCODE"), 20202021);
+const COMM_DATA: BasicCommData = BasicCommData {
+    password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(
+        &COMM_PASSCODE.to_le_bytes(),
+    )),
+    discriminator: parse_env_u32(option_env!("MATTER_DISCRIMINATOR"), 3840) as u16,
+};
+
 /// The Matter node: root endpoint + our Occupancy Sensor endpoint.
 const NODE: Node = Node {
     endpoints: &[
@@ -195,14 +224,7 @@ pub async fn run(
 
     // Allocate the (large) Matter stack statically.
     let stack = mk_static!(EmbassyThreadMatterStack::<BUMP_SIZE, ()>).init_with(
-        EmbassyThreadMatterStack::init(
-            &BASIC_INFO,
-            BasicCommData {
-                password: TEST_DEV_COMM.password,
-                discriminator: TEST_DEV_COMM.discriminator,
-            },
-            &TEST_DEV_ATT,
-        ),
+        EmbassyThreadMatterStack::init(&BASIC_INFO, COMM_DATA, &TEST_DEV_ATT),
     );
 
     // Occupancy Sensor cluster handler, driven by the shared presence state.

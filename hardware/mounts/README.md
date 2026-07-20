@@ -62,6 +62,34 @@ absorbs what the recesses don't.
   45° wedge well when mounted higher (~2.2–2.7 m); the corner mount is meant
   for the ceiling corner of the room. The radar's ±60° beam covers most rooms.
 
+## Provisioning a unit (flash + unique codes + pamphlet)
+
+Each board that goes to someone else gets its own Matter passcode and
+discriminator, flashed in and printed on a personalized fold-in-half
+pamphlet (`pamphlet-template.html` is the template):
+
+```sh
+scripts/provision.py                 # plug the new board in first
+```
+
+That generates spec-valid random codes, builds the firmware with them baked
+in (`MATTER_PASSCODE` / `MATTER_DISCRIMINATOR` env vars, see
+`src/matter/mod.rs`), flashes over `/dev/ttyACM0` (`--port` to change),
+derives the QR + 11-digit manual pairing code (self-tested against the
+Matter spec's canonical vectors), and writes
+`hardware/units/unit-NNN/{pamphlet.html,pamphlet.pdf,codes.json}` plus a
+line in `hardware/units/registry.json`. Print the PDF on US Letter,
+landscape, double-sided **flip on short edge**, fold in half.
+
+`--no-flash` for a dry run; `--regen N` re-renders an existing unit's
+pamphlet (e.g. after a template edit). After flashing, power-cycle and check
+the boot log prints the same manual code as the pamphlet.
+
+Note: units still use the Matter **test VID/PID** (`0xFFF1`/`0x8001`), so
+every recipient's Google account must be added to your Developer Console
+project — actually selling them requires CSA certification, per-device
+attestation certs (DACs), and real vendor IDs.
+
 ## Regenerating / tweaking
 
 `mounts.py` is a parametric FreeCAD script (all dimensions are named constants
