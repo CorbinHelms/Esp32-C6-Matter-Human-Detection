@@ -43,16 +43,26 @@ SLOT_W = 10.0                  # USB-C cable slot in the bottom (short) wall
 LIP_W, LIP_OVER, LIP_T = 12.0, 1.5, 1.5   # rigid lip, top edge
 TAB_W, TAB_OVER, TAB_T = 3.0, 1.0, 1.5    # snap tabs, bottom edge
 
+# Imperfect-wall forgiveness: everything is recessed RECESS off the wall
+# planes except small contact lands (rails / pads), so texture high spots and
+# corner-bead buildup can't rock the mount. Both mounts print upside down on
+# their flat top face, which keeps every recess face vertical (no bridges).
+RECESS = 1.2                   # stand-off of the non-contact back surfaces
+
 # ---- flat-wall wedge parameters (global: wall = y=0 plane, +y out, +z up) --
-PLATE_W, PLATE_H, PLATE_T = 40.0, 44.0, 3.0
+PLATE_W, PLATE_T = 40.0, 3.0
 WEDGE_STANDOFF = 9.0           # wall clearance at the pocket's lower back edge
 WEDGE_LIFT = 14.0              # height (z) of the pocket's lower back edge
+PLATE_H = WEDGE_LIFT + POC_L * S2   # top coplanar with fill/pocket -> flat bed face
+RAIL_W = 9.0                   # tape rails at the plate's left/right edges
 
 # ---- corner mount parameters (walls = x=0 and y=0 planes, corner on z axis) -
-WING_LEN, WING_H, WING_T = 40.0, 46.0, 3.0
+WING_LEN, WING_T = 55.0, 3.0
 CORNER_OFFSET = 15.0           # back lower-edge center, along the bisector
 CORNER_LIFT = 16.0             # height (z) of that edge
-FILL_CAP_MARGIN = 4.0
+WING_H = CORNER_LIFT + POC_L * S2  # wings flush with the fill's flat top
+CORNER_RELIEF = 10.0           # apex cut-back: no material where x + y < this
+PAD_LEN = 20.0                 # wall-contact pads at the outer end of each wing
 
 
 def yz_profile_solid(pts, x0, width):
@@ -133,7 +143,14 @@ def make_wall_mount(pocket):
     fill = fill.common(Part.makeBox(200, 200, 200, App.Vector(-50, 0, -50)))
 
     plate = Part.makeBox(PLATE_W, PLATE_T, PLATE_H)
-    return plate.fuse(fill).fuse(pock).removeSplitter(), App.Vector(0, S2, -S2)
+    solid = plate.fuse(fill).fuse(pock)
+
+    # Recess the wall side between the two tape rails so a texture high spot
+    # under the middle can't rock the mount off the rails.
+    solid = solid.cut(Part.makeBox(PLATE_W - 2 * RAIL_W, RECESS + 1,
+                                   PLATE_H + 2,
+                                   App.Vector(RAIL_W, -1, -1)))
+    return solid.removeSplitter(), App.Vector(0, S2, -S2)
 
 
 def make_corner_mount(pocket):
@@ -150,14 +167,31 @@ def make_corner_mount(pocket):
     back = placed(back_face(), cols, origin)
 
     # Fill from the tilted back face horizontally into the corner,
-    # trimmed to the two walls and capped on top.
-    top = CORNER_LIFT + POC_L * S2 + FILL_CAP_MARGIN
+    # trimmed to the two walls (its flat top ends up at z = WING_H).
     fill = back.extrude(bis * -(CORNER_OFFSET + POC_W + 5))
-    fill = fill.common(Part.makeBox(100, 100, top))
+    fill = fill.common(Part.makeBox(100, 100, WING_H + 1))
 
     wing_x = Part.makeBox(WING_T, WING_LEN, WING_H)
     wing_y = Part.makeBox(WING_LEN, WING_T, WING_H)
-    return wing_x.fuse(wing_y).fuse(fill).fuse(pock).removeSplitter(), aim
+    solid = wing_x.fuse(wing_y).fuse(fill).fuse(pock)
+
+    # Apex relief: cut back everything within x + y < CORNER_RELIEF so the
+    # mount never touches the corner itself (bead radius, mud buildup).
+    tri = Part.Face(Part.makePolygon([
+        App.Vector(-1, -1, -1),
+        App.Vector(CORNER_RELIEF + 1, -1, -1),
+        App.Vector(-1, CORNER_RELIEF + 1, -1),
+        App.Vector(-1, -1, -1)]))
+    solid = solid.cut(tri.extrude(App.Vector(0, 0, WING_H + 2)))
+
+    # Recess each wing (and the fill) off its wall, sparing a PAD_LEN contact
+    # pad at the outer end. Only the pads touch; the thinned wing span flexes
+    # enough to seat both pads on an out-of-square corner.
+    solid = solid.cut(Part.makeBox(RECESS + 1, WING_LEN - PAD_LEN + 1,
+                                   WING_H + 2, App.Vector(-1, -1, -1)))
+    solid = solid.cut(Part.makeBox(WING_LEN - PAD_LEN + 1, RECESS + 1,
+                                   WING_H + 2, App.Vector(-1, -1, -1)))
+    return solid.removeSplitter(), aim
 
 
 def check(name, solid, aim):
@@ -169,6 +203,13 @@ def check(name, solid, aim):
              and f.normalAt(0, 0).getAngle(aim) < 1e-6]
     assert front, name + ": no face normal to the aim direction"
     bb = solid.BoundBox
+    # flip-print bed face: the top must be flat with real area
+    top = [f for f in solid.Faces
+           if isinstance(f.Surface, Part.Plane)
+           and f.normalAt(0, 0).getAngle(App.Vector(0, 0, 1)) < 1e-6
+           and abs(f.CenterOfMass.z - bb.ZMax) < 1e-6]
+    top_area = sum(f.Area for f in top)
+    assert top_area > 300, name + ": top bed face only %.0f mm2" % top_area
     print("%s ok: volume %.0f mm3, bbox %.1f x %.1f x %.1f mm"
           % (name, solid.Volume, bb.XLength, bb.YLength, bb.ZLength))
 
@@ -179,6 +220,8 @@ corner_mount, corner_aim = make_corner_mount(pocket)
 check("wall-mount-45", wall_mount, wall_aim)
 check("corner-mount-45", corner_mount, corner_aim)
 
+if "mounts" in App.listDocuments():
+    App.closeDocument("mounts")
 doc = App.newDocument("mounts")
 for label, solid in (("wall_mount_45", wall_mount),
                      ("corner_mount_45", corner_mount)):
