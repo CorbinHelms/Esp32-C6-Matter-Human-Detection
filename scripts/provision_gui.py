@@ -23,6 +23,7 @@ from tkinter import ttk, messagebox
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROVISION = os.path.join(REPO, "scripts", "provision.py")
+FLASH_REPEATER = os.path.join(REPO, "scripts", "flash_repeater.py")
 REGISTRY = os.path.join(REPO, "hardware", "units", "registry.json")
 UNITS_DIR = os.path.join(REPO, "hardware", "units")
 
@@ -65,9 +66,15 @@ class App:
         ttk.Checkbutton(top, text="Dry run (no flash)",
                         variable=self.dry).pack(side="left", padx=10)
 
-        self.go = ttk.Button(root, text="Provision new unit",
+        btnrow = ttk.Frame(root)
+        btnrow.pack(fill="x", padx=10, pady=(2, 4))
+        self.go = ttk.Button(btnrow, text="Provision new unit",
                              command=self.provision)
-        self.go.pack(fill="x", padx=10, pady=(2, 4), ipady=6)
+        self.go.pack(side="left", fill="x", expand=True, ipady=6)
+        self.go_rep = ttk.Button(btnrow, text="Flash repeater",
+                                 command=self.flash_repeater)
+        self.go_rep.pack(side="left", fill="x", expand=True, ipady=6,
+                         padx=(6, 0))
 
         self.status = ttk.Label(root, text="Plug in a new board and hit "
                                 "Provision.", anchor="w")
@@ -189,6 +196,7 @@ class App:
             return
         self.status.configure(text=status)
         self.go.state(["disabled"])
+        self.go_rep.state(["disabled"])
         self.append_log("$ " + " ".join(args) + "\n")
 
         def pump():
@@ -215,12 +223,33 @@ class App:
         else:
             args += ["--port", self.port.get()]
         self.expect_new_unit = True
+        self.done_msg = ("Done. Print the pamphlet; power-cycle the board "
+                         "and check the boot log shows the same code.")
         self.start_proc(args, "Provisioning... (build + flash take a bit)")
+
+    def flash_repeater(self):
+        args = [sys.executable, FLASH_REPEATER]
+        if self.dry.get():
+            args.append("--no-flash")
+        elif not self.port.get():
+            messagebox.showerror(
+                "No serial port",
+                "No board found on /dev/ttyACM* or /dev/ttyUSB*.\n"
+                "Plug the board in and hit Rescan, or tick Dry run.")
+            return
+        else:
+            args += ["--port", self.port.get()]
+        self.expect_new_unit = False
+        self.done_msg = ("Repeater flashed. Unplug it and plug it into USB "
+                         "power halfway to the far sensor (see the log for "
+                         "the LED patterns).")
+        self.start_proc(args, "Flashing repeater... (build + flash take a bit)")
 
     def regen_selected(self):
         u = self.selected_unit()
         if u is not None:
             self.expect_new_unit = False
+            self.done_msg = "Done."
             self.start_proc([sys.executable, PROVISION, "--regen", str(u)],
                             "Re-rendering pamphlet for unit %03d..." % u)
 
@@ -228,11 +257,12 @@ class App:
         code = self.proc.returncode if self.proc else -1
         self.proc = None
         self.go.state(["!disabled"])
+        self.go_rep.state(["!disabled"])
         self.refresh_units()
         if code != 0:
             self.status.configure(text="Failed (exit %d) - see the log." % code)
             return
-        self.status.configure(text="Done.")
+        self.status.configure(text=getattr(self, "done_msg", "Done."))
         if not getattr(self, "expect_new_unit", False):
             return
         reg = load_registry()
@@ -248,9 +278,6 @@ class App:
         self.show_qr(unit["qr"])
         self.card.pack(fill="x", padx=10, pady=4,
                        after=self.status)
-        self.status.configure(
-            text="Done. Print the pamphlet; power-cycle the board and check "
-                 "the boot log shows the same code.")
 
     def show_qr(self, payload):
         try:

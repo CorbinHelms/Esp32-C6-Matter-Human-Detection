@@ -79,6 +79,11 @@ The GUI wraps the CLI: pick the port, hit **Provision new unit**, watch the
 log; on success it shows the unit's code + QR with an *Open pamphlet PDF*
 button, and lists previous units (open / re-render).
 
+The **Flash repeater** button instead flashes the board as a Thread range
+extender (`scripts/flash_repeater.py`, needs `.bringup/dataset.hex`): no
+codes or pamphlet — plug it into USB power halfway to an out-of-range
+sensor and its LED goes solid once it's routing.
+
 That generates spec-valid random codes, builds the firmware with them baked
 in (`MATTER_PASSCODE` / `MATTER_DISCRIMINATOR` env vars, see
 `src/matter/mod.rs`), flashes over `/dev/ttyACM0` (`--port` to change),
