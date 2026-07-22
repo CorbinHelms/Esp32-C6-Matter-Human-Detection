@@ -231,6 +231,8 @@ Wifi Pro, or Google TV Streamer 4K).
 
 ```
 src/bin/main.rs     runtime + heap setup, spawns LED + sensor tasks, runs Matter
+src/bin/repeater.rs Thread range extender: joins as FTD → auto-promoted Router
+                    (build with --features ftd + THREAD_DATASET_HEX; no Matter)
 src/board.rs        XIAO ESP32-C6 pin map (the non-linear D-label table)
 src/presence.rs     hold-time debouncer (pure logic, has unit tests)
 src/sensor.rs       async LD2410 UART driver + shared PresenceState

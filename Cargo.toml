@@ -10,6 +10,18 @@ version      = "0.1.0"
 name = "esp32c6-matter-human-detection"
 path = "./src/bin/main.rs"
 
+# Thread range extender (no Matter/sensor) — needs the router-capable (FTD)
+# OpenThread library, so a plain `cargo build` skips it:
+#   cargo build --release --features ftd --bin repeater
+[[bin]]
+name = "repeater"
+path = "./src/bin/repeater.rs"
+required-features = ["ftd"]
+
+[features]
+# Link libopenthread-ftd (router/leader roles) instead of the MTD library.
+ftd = ["openthread/ftd"]
+
 [dependencies]
 # --- Espressif baremetal HAL / runtime / radio (all crates.io) ---
 esp-hal = { version = "~1.1.0", features = ["esp32c6", "log-04", "unstable", "exception-handler"] }
