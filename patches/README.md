@@ -95,3 +95,10 @@ The script also deletes `vendor/openthread-sys/libs/` and the pre-generated
 riscv32imac bindings, forcing the on-the-fly OpenThread C build (needs
 `cmake` + `clang`) — otherwise the prebuilt archives would silently ignore
 the `OT_LOG_LEVEL` change.
+
+## openthread-become-router.patch
+
+Adds `OpenThread::become_router()` (gated on the `ftd` feature) wrapping
+`otThreadBecomeRouter`, so the repeater firmware can solicit a router ID
+immediately instead of waiting on the REED self-upgrade's randomized jitter —
+observed taking 10+ minutes (or stalling) against the Nest-led network.

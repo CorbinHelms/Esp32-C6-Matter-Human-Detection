@@ -1,0 +1,33 @@
+--- a/openthread/src/lib.rs
++++ b/openthread/src/lib.rs
+@@ -86,6 +86,8 @@
+     otThreadSetLinkMode, OT_CHANGED_THREAD_ROLE, OT_RADIO_CAPS_ACK_TIMEOUT,
+     OT_RADIO_FRAME_MAX_SIZE,
+ };
++#[cfg(feature = "ftd")]
++use sys::otThreadBecomeRouter;
+ 
+ /// A newtype wrapper over the native OpenThread error type (`otError`).
+ ///
+@@ -473,6 +475,21 @@
+         ot!(unsafe { otThreadSetLinkMode(state.ot.instance, mode) })
+     }
+ 
++    /// Request an immediate upgrade to the Router role (FTD only).
++    ///
++    /// Sends an Address Solicit to the leader right away instead of waiting for
++    /// the periodic REED self-evaluation with its randomized jitter. Valid only
++    /// while attached (typically as a child); returns `InvalidState` otherwise.
++    /// The role change (if the leader grants a router ID) is reported through
++    /// the normal state-change path.
++    #[cfg(feature = "ftd")]
++    pub fn become_router(&self) -> Result<(), OtError> {
++        let mut ot = self.activate();
++        let state = ot.state();
++
++        ot!(unsafe { otThreadBecomeRouter(state.ot.instance) })
++    }
++
+     /// Gets the list of IPv6 addresses currently assigned to the Thread interface
+     ///
+     /// Arguments:

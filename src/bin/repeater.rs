@@ -34,7 +34,7 @@ use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
 use esp_metadata_generated::memory_range;
-use log::info;
+use log::{info, warn};
 use tinyrlibc as _;
 
 use openthread::esp::{EspRadio, Ieee802154};
@@ -118,8 +118,14 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 }
 
 /// Logs role changes and drives the role-indicating LED pattern.
+///
+/// Also nudges the stack toward the Router role: the autonomous REED→Router
+/// upgrade rides a randomized jitter and was observed taking 10+ minutes (or
+/// stalling outright) on the real Nest-led network, so while attached as a
+/// child we explicitly solicit a router ID every 30 s.
 async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
     let mut last_role = None;
+    let mut child_secs = 0u32;
     loop {
         let role = ot.net_status().role;
         if last_role != Some(role) {
@@ -137,18 +143,27 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
 
         match role {
             DeviceRole::Router | DeviceRole::Leader => {
+                child_secs = 0;
                 led.set_high();
                 Timer::after(Duration::from_millis(2900)).await;
                 led.set_low();
                 Timer::after(Duration::from_millis(100)).await;
             }
             DeviceRole::Child => {
+                child_secs += 1;
+                if child_secs % 30 == 10 {
+                    match ot.become_router() {
+                        Ok(()) => info!("repeater: soliciting router role"),
+                        Err(e) => warn!("repeater: router solicit failed: {e:?}"),
+                    }
+                }
                 led.set_high();
                 Timer::after(Duration::from_millis(500)).await;
                 led.set_low();
                 Timer::after(Duration::from_millis(500)).await;
             }
             _ => {
+                child_secs = 0;
                 led.set_high();
                 Timer::after(Duration::from_millis(120)).await;
                 led.set_low();
