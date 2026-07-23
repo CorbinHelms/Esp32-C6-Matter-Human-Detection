@@ -48,6 +48,15 @@ pub const RF_SWITCH_EN_GPIO: u8 = 3;
 /// RF switch port select: low = onboard ceramic, high = U.FL. Internal net.
 pub const RF_SWITCH_SEL_GPIO: u8 = 14;
 
+/// Drive the user LED; `on = true` means *visibly lit* (handles the
+/// active-low wiring so callers never think in pin levels).
+pub fn led_set(led: &mut esp_hal::gpio::Output<'_>, on: bool) {
+    use esp_hal::gpio::Level;
+
+    let high = on != LED_ACTIVE_LOW;
+    led.set_level(if high { Level::High } else { Level::Low });
+}
+
 /// Set at build time via the `EXTERNAL_ANTENNA` env var ("", "0" and
 /// "false" count as unset).
 pub const EXTERNAL_ANTENNA: bool = env_flag(option_env!("EXTERNAL_ANTENNA"));

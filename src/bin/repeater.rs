@@ -45,7 +45,7 @@ use esp_metadata_generated::memory_range;
 use log::{info, warn};
 use tinyrlibc as _;
 
-use esp32c6_matter_human_detection::board;
+use esp32c6_matter_human_detection::board::{self, led_set};
 use openthread::esp::{EspRadio, Ieee802154};
 use openthread::{DeviceRole, OpenThread, OtResources, SimpleRamSettings};
 
@@ -290,13 +290,6 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
             }
         }
     }
-}
-
-/// Drive the user LED, honoring the board's active-low wiring
-/// (`board::LED_ACTIVE_LOW`): `on = true` means *visibly lit*.
-fn led_set(led: &mut Output<'_>, on: bool) {
-    let high = on != board::LED_ACTIVE_LOW;
-    led.set_level(if high { Level::High } else { Level::Low });
 }
 
 fn decode_hex<'a>(hex: &str, out: &'a mut [u8]) -> &'a [u8] {

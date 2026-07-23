@@ -118,13 +118,35 @@ async fn phy_radio_task(mut runner: PhyRadioRunner<'static>, radio: EspRadio<'st
     runner.run(radio, EmbassyTimeTimer).await
 }
 
-/// Blinks the builtin LED so the board shows a visible sign of life independent
-/// of the serial console.
+/// Drives the builtin LED as an at-a-glance connectivity indicator:
+/// - **solid with a brief dip every 3 s**: a Matter controller (Google) has
+///   read from us within the last 10 minutes — online end to end.
+/// - **1 Hz blink**: alive, but no controller has read from us recently
+///   (not commissioned, no Thread, or Google can't reach us).
+///
+/// Walking in front of the sensor forces a subscription report (a read), so
+/// a working unit refreshes to solid immediately when tested.
 #[embassy_executor::task]
 async fn blink(mut led: Output<'static>) {
     let _ = board::LED_GPIO; // documents which pin this task drives
     loop {
-        led.toggle();
-        Timer::after(Duration::from_millis(500)).await;
+        let last = matter::occupancy::LAST_CONTROLLER_READ_SECS
+            .load(core::sync::atomic::Ordering::Relaxed);
+        let online = last != u32::MAX
+            && embassy_time::Instant::now()
+                .as_secs()
+                .saturating_sub(last as u64)
+                < 600;
+        if online {
+            board::led_set(&mut led, true);
+            Timer::after(Duration::from_millis(2900)).await;
+            board::led_set(&mut led, false);
+            Timer::after(Duration::from_millis(100)).await;
+        } else {
+            board::led_set(&mut led, true);
+            Timer::after(Duration::from_millis(500)).await;
+            board::led_set(&mut led, false);
+            Timer::after(Duration::from_millis(500)).await;
+        }
     }
 }

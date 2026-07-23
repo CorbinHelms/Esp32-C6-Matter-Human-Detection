@@ -24,7 +24,15 @@ use rs_matter_embassy::matter::dm::{
 use rs_matter_embassy::matter::error::Error;
 use rs_matter_embassy::matter::with;
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::sensor::PresenceState;
+
+/// Seconds-since-boot of the most recent Matter read of this cluster — i.e.
+/// the last moment a controller (Google) actually pulled data from us, either
+/// a direct read or a subscription report. `u32::MAX` = never. Drives the
+/// "online" LED pattern in `main.rs`.
+pub static LAST_CONTROLLER_READ_SECS: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Matter Device Library "Occupancy Sensor" device type (`0x0107`). Not
 /// predefined in rs-matter, so we declare it. Revision 4 matches the current
@@ -107,6 +115,10 @@ impl OccupancyClusterHandler for OccupancySensingHandler {
 
 impl Handler for OccupancySensingHandler {
     fn read(&self, ctx: impl ReadContext, reply: impl ReadReply) -> Result<(), Error> {
+        LAST_CONTROLLER_READ_SECS.store(
+            embassy_time::Instant::now().as_secs() as u32,
+            Ordering::Relaxed,
+        );
         // Reuse the generated adaptor's attribute encoding (incl. the global
         // attributes). `&Self: ClusterHandler` via the generated blanket impl.
         HandlerAdaptor(self).read(ctx, reply)
