@@ -74,8 +74,12 @@ const DATASET_HEX: Option<&str> = option_env!("THREAD_DATASET_HEX");
 /// deployed at a wall, no serial cable involved.
 const TELEMETRY_DEST: Option<&str> = option_env!("TELEMETRY_DEST");
 /// The dev PC's IPv4 (dotted quad), reached as a second sink via the border
-/// router's NAT64 (well-known prefix 64:ff9b::/96) in case the mesh has no
-/// route to the PC's global IPv6.
+/// router's NAT64 prefix **discovered from Thread network data** at runtime.
+/// (Google's Nest BR publishes a ULA-derived /96 — observed
+/// fd6b:588a:7d6a:2::/96 — NOT the well-known 64:ff9b::/96 that v2 assumed;
+/// the well-known prefix is kept only as a fallback guess if no /96 route is
+/// published.) On this mesh the netdata routes are fc00::/7 + the NAT64 /96
+/// only — no default route — so this is the ONLY sink that can work.
 const TELEMETRY_DEST_V4: Option<&str> = option_env!("TELEMETRY_DEST_V4");
 const TELEMETRY_PORT: u16 = 9999;
 
@@ -109,7 +113,23 @@ impl log::Log for TeleLogger {
         esp_println::println!("{} - {}", r.level(), r.args());
         let mut s = heapless::String::<160>::new();
         let _ = core::fmt::write(&mut s, format_args!("{}", r.args())); // truncates
-        if s.contains(":9999") || s.contains("12424") {
+        // "Failed to find valid route": OT's Ip6 error for an unroutable sink,
+        // logged once PER SEND with no port in the line — it slipped the two
+        // port filters and self-amplified into a 100+ line/s storm (observed
+        // 2026-07-23; also starved the heartbeat).
+        // "MeshForwarder": every per-packet TX/RX/drop summary from that
+        // module. Each telemetry send generates at least one such port-free
+        // line ("Sent IPv6 UDP msg" on success, "Dropping ... NoRoute" on
+        // route failure — both observed echoing at ratio 1.0, ~235
+        // datagrams/s), so the module's chatter can never be queue-safe.
+        // Console still shows it all; MLE/RouterTable lines still stream.
+        // The circuit breaker in telemetry() is the backstop for whatever
+        // port-free line another module invents next.
+        if s.contains(":9999")
+            || s.contains("12424")
+            || s.contains("Failed to find valid route")
+            || s.contains("MeshForwarder")
+        {
             return;
         }
         let _ = TELEMETRY.try_send(s);
@@ -198,25 +218,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 async fn telemetry(ot: OpenThread<'_>) -> ! {
     use core::net::{Ipv6Addr, SocketAddrV6};
 
-    // Sink list: the PC's global IPv6, plus the PC's IPv4 through the border
-    // router's NAT64 (well-known prefix). Either may be unroutable in a given
-    // network — every batch goes to all sinks and the heartbeat reports
-    // per-sink success/error counters so the working path is identifiable.
-    let mut sinks: heapless::Vec<SocketAddrV6, 2> = heapless::Vec::new();
-    if let Some(Ok(ip)) = TELEMETRY_DEST.map(|s| s.parse::<Ipv6Addr>()) {
-        let _ = sinks.push(SocketAddrV6::new(ip, TELEMETRY_PORT, 0, 0));
-    }
-    if let Some(Ok(v4)) = TELEMETRY_DEST_V4.map(|s| s.parse::<core::net::Ipv4Addr>()) {
-        let [a, b, c, d] = v4.octets();
-        let nat64 = Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, u16::from_be_bytes([a, b]), u16::from_be_bytes([c, d]));
-        let _ = sinks.push(SocketAddrV6::new(nat64, TELEMETRY_PORT, 0, 0));
-    }
-    if sinks.is_empty() {
-        loop {
-            Timer::after(Duration::from_secs(3600)).await;
-        }
-    }
-
     loop {
         if ot.net_status().role.is_connected() {
             break;
@@ -232,22 +233,95 @@ async fn telemetry(ot: OpenThread<'_>) -> ! {
             Err(_) => Timer::after(Duration::from_secs(5)).await,
         }
     };
-    info!("telemetry: streaming to {} sink(s)", sinks.len());
 
-    // What can the mesh route to? (Answers "why doesn't a sink work".)
+    // What can the mesh route to? (Answers "why doesn't a sink work".) The
+    // /96 external route is the border router's NAT64 prefix — harvest it —
+    // and every entry goes into the coverage table used to vet sinks below.
+    let mut nat64: Option<Ipv6Addr> = None;
+    let mut coverage: heapless::Vec<(Ipv6Addr, u8), 8> = heapless::Vec::new();
     ot.netdata_dump(|is_route, octets, len| {
         let ip = Ipv6Addr::from(*octets);
         info!(
             "netdata {}: {ip}/{len}",
             if is_route { "route" } else { "prefix" }
         );
+        if is_route && len == 96 && nat64.is_none() {
+            nat64 = Some(ip);
+        }
+        let _ = coverage.push((ip, len));
     });
 
+    // Sink list: the PC's global IPv6, plus the PC's IPv4 embedded in the
+    // discovered NAT64 prefix. A sink no published route covers is disabled
+    // up front: send() reports Ok even for those (the drop happens later, in
+    // forwarding — observed 2026-07-23), so its ok-counter would just lie.
+    // On a mesh that publishes a default route the GUA sink auto-enables.
+    let mut sinks: heapless::Vec<SocketAddrV6, 2> = heapless::Vec::new();
+    if let Some(Ok(ip)) = TELEMETRY_DEST.map(|s| s.parse::<Ipv6Addr>()) {
+        if covered(&ip, &coverage) {
+            let _ = sinks.push(SocketAddrV6::new(ip, TELEMETRY_PORT, 0, 0));
+        } else {
+            info!("telemetry: sink {ip} not covered by any mesh route, disabled");
+        }
+    }
+    if let Some(Ok(v4)) = TELEMETRY_DEST_V4.map(|s| s.parse::<core::net::Ipv4Addr>()) {
+        let p = nat64
+            .unwrap_or(Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, 0, 0))
+            .segments();
+        let [a, b, c, d] = v4.octets();
+        let ip = Ipv6Addr::new(
+            p[0], p[1], p[2], p[3], p[4], p[5],
+            u16::from_be_bytes([a, b]),
+            u16::from_be_bytes([c, d]),
+        );
+        if covered(&ip, &coverage) {
+            info!(
+                "telemetry: nat64 sink {ip} (prefix {} netdata)",
+                if nat64.is_some() { "from" } else { "NOT in" }
+            );
+            let _ = sinks.push(SocketAddrV6::new(ip, TELEMETRY_PORT, 0, 0));
+        } else {
+            info!("telemetry: nat64 sink {ip} not covered by any mesh route, disabled");
+        }
+    }
+    if sinks.is_empty() {
+        loop {
+            Timer::after(Duration::from_secs(3600)).await;
+        }
+    }
+    info!("telemetry: streaming to {} sink(s)", sinks.len());
+
+    // Consecutive-error backoff per sink: an unroutable sink makes OpenThread
+    // log an Ip6 error PER SEND; without a bound, those lines re-enter the
+    // queue and sustain a log storm (observed: 100+ lines/s for 8 min).
     let mut ok = [0u32; 2];
     let mut err = [0u32; 2];
+    let mut consec = [0u8; 2];
+    let mut bench_until = [Instant::from_ticks(0); 2];
     let mut last_hb = Instant::now();
+    let mut window_batches: u32 = 0;
     let mut batch = heapless::String::<1400>::new();
     loop {
+        // Heartbeat is emitted here, NOT in the timer branch of the select:
+        // a busy channel wins the select every time, and v2's timer-branch
+        // heartbeat never ran once during the storm.
+        if Instant::now() >= last_hb + Duration::from_secs(10) {
+            last_hb = Instant::now();
+            // Queued via info!, rides the next batch to every sink.
+            info!(
+                "tele hb sinks ok={},{} err={},{}",
+                ok[0], ok[1], err[0], err[1]
+            );
+            // Circuit breaker: legit debug traffic is tens of batches per
+            // window; hundreds means some new OT log line is echoing our own
+            // sends. Bench everything briefly — the echo dies with the sends.
+            if window_batches > 300 {
+                warn!("telemetry: {window_batches} batches/10s — echo storm, pausing 10s");
+                let until = Instant::now() + Duration::from_secs(10);
+                bench_until = [until; 2];
+            }
+            window_batches = 0;
+        }
         match embassy_futures::select::select(
             TELEMETRY.receive(),
             Timer::at(last_hb + Duration::from_secs(10)),
@@ -267,23 +341,47 @@ async fn telemetry(ot: OpenThread<'_>) -> ! {
                     let _ = batch.push('\n');
                     let _ = batch.push_str(next.as_str());
                 }
+                let mut sent_any = false;
                 for (i, dest) in sinks.iter().enumerate() {
+                    if Instant::now() < bench_until[i] {
+                        continue;
+                    }
+                    sent_any = true;
                     match sock.send(batch.as_bytes(), None, dest).await {
-                        Ok(()) => ok[i] += 1,
-                        Err(_) => err[i] += 1,
+                        Ok(()) => {
+                            ok[i] += 1;
+                            consec[i] = 0;
+                        }
+                        Err(_) => {
+                            err[i] += 1;
+                            consec[i] = consec[i].saturating_add(1);
+                            if consec[i] >= 5 {
+                                bench_until[i] = Instant::now() + Duration::from_secs(30);
+                                consec[i] = 0;
+                            }
+                        }
                     }
                 }
+                if sent_any {
+                    window_batches += 1;
+                }
             }
-            embassy_futures::select::Either::Second(()) => {
-                last_hb = Instant::now();
-                // Queued via info!, rides the next batch to every sink.
-                info!(
-                    "tele hb sinks ok={},{} err={},{}",
-                    ok[0], ok[1], err[0], err[1]
-                );
-            }
+            embassy_futures::select::Either::Second(()) => {}
         }
     }
+}
+
+/// Longest-prefix containment check against the netdata coverage table: is
+/// `dest` inside any published on-mesh prefix or external route? (A /0 route
+/// — a real default route — covers everything.)
+fn covered(dest: &core::net::Ipv6Addr, table: &[(core::net::Ipv6Addr, u8)]) -> bool {
+    table.iter().any(|(prefix, len)| {
+        let (d, p) = (dest.octets(), prefix.octets());
+        let whole = (*len / 8) as usize;
+        let rem = *len % 8;
+        d[..whole] == p[..whole]
+            && (rem == 0 || (d[whole] ^ p[whole]) >> (8 - rem) == 0)
+    })
 }
 
 /// Prints the vendored esp-radio ISR counters every 15 s (deltas since the
