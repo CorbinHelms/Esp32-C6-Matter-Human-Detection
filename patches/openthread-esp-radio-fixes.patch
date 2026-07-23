@@ -31,7 +31,22 @@
              ..Default::default()
          };
  
-@@ -191,7 +204,23 @@
+@@ -148,9 +161,11 @@
+                                 ack_frame.channel
+                             );
+ 
+-                            // Only read RSSI if there is at least one byte after the PSDU.
+-                            let rssi = if ack_frame.data.len() > 1 + ack_psdu_len {
+-                                Some(ack_frame.data[1..][ack_psdu_len] as i8)
++                            // VENDORED PATCH: same FCS-slot RSSI read as in
++                            // `receive()` below — the old index was past the
++                            // frame (fixed-size buffer), yielding garbage.
++                            let rssi = if ack_psdu_len >= 2 {
++                                Some(ack_frame.data[1..][ack_psdu_len - 2] as i8)
+                             } else {
+                                 None
+                             };
+@@ -191,7 +206,23 @@
                  break frame;
              }
  
@@ -56,3 +71,29 @@
          };
  
          if raw.data.len() < 1 {
+@@ -211,9 +242,22 @@
+ 
+         psdu_buf[..psdu_len].copy_from_slice(&raw.data[1..][..psdu_len]);
+ 
+-        // Only read RSSI if there is at least one byte after the PSDU.
+-        let rssi = if raw.data.len() > 1 + psdu_len {
+-            Some(raw.data[1..][psdu_len] as i8)
++        // VENDORED PATCH: RSSI lives IN the PSDU's FCS slots, not after it.
++        //
++        // `RawReceived.data` is a fixed-size array, so `data.len()` is always
++        // FRAME_SIZE — the old `data.len() > 1 + psdu_len` guard always
++        // passed and `data[1..][psdu_len]` read one byte PAST the frame:
++        // stale queue memory (observed as rss 0 / -38 / -113 garbage). The
++        // ESP 802.15.4 hardware replaces the 2-byte FCS with RSSI + LQI, so
++        // RSSI is the second-to-last PSDU byte — the same slot esp-radio's
++        // own `received()` reads (`data[data[0] - 1]`). Garbage RSS fed
++        // OpenThread's neighbor link margins: a Router neighbor could sit at
++        // LinkQualityIn=0 (link cost ∞ → MeshForwarder NoRoute for
++        // everything) while its frames decoded perfectly — observed
++        // 2026-07-23 as the repeater's netdata-covered telemetry sink
++        // dropping 10,611:12 post-promotion.
++        let rssi = if psdu_len >= 2 {
++            Some(raw.data[1..][psdu_len - 2] as i8)
+         } else {
+             None
+         };

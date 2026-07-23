@@ -112,3 +112,19 @@
      /// Gets the list of IPv6 addresses currently assigned to the Thread interface
      ///
      /// Arguments:
+@@ -1592,7 +1690,14 @@
+ 
+     // from https://github.com/espressif/esp-idf/blob/release/v5.3/components/openthread/src/port/esp_openthread_radio.c#L35
+     fn plat_radio_receive_sensititivy(&mut self) -> i8 {
+-        let sens = 0; // TODO
++        // VENDORED PATCH: 0 dBm ("TODO") made every link margin negative —
++        // OpenThread computes margin = RSS - sensitivity, so ALL neighbors
++        // sat at LinkQualityIn 0 (router-router links unusable, cost ∞,
++        // MeshForwarder NoRoute for every off-link unicast once the node
++        // became a Router; also zeroed the link margin advertised in Parent
++        // Responses). -104 dBm is the ESP32-C6 datasheet RX sensitivity
++        // (250 kbps O-QPSK); a -37 dBm neighbor now yields margin 67 → LQ 3.
++        let sens = -104;
+         trace!(
+             "Plat radio receive sensitivity callback, sensitivity: {}",
+             sens
