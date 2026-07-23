@@ -29,7 +29,9 @@
 //!   the home network by forming a partition of its own.
 //! - slow blink: attached as child (not yet routing)
 //! - solid with a short dip every 3 s: Router (or Leader of a shared
-//!   partition) — meshed and repeating traffic
+//!   partition) — meshed and repeating traffic. Extra quick dips right
+//!   after the main one count attached children (double dip = one device
+//!   is parented through this repeater)
 //! - double-flash then pause: Leader of a **singleton** partition (should no
 //!   longer happen with the eligibility gating; kept as a safety net)
 
@@ -254,6 +256,15 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
                 Timer::after(Duration::from_millis(2900)).await;
                 led_set(&mut led, false);
                 Timer::after(Duration::from_millis(100)).await;
+                // One extra quick dip per attached child (capped at 5), so
+                // "is the far sensor using me?" is visible without serial:
+                // single dip = routing but no children; double dip = 1 child.
+                for _ in 0..children.min(5) {
+                    led_set(&mut led, true);
+                    Timer::after(Duration::from_millis(180)).await;
+                    led_set(&mut led, false);
+                    Timer::after(Duration::from_millis(180)).await;
+                }
             }
             DeviceRole::Child => {
                 child_secs += 1;
