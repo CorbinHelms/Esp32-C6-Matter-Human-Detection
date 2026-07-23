@@ -126,6 +126,29 @@ stale/offline entry of the device from Google Home first, and **don't cancel the
 - espflash monitor is kept running via nohup writing to a log; grep that file rather than
   attaching interactively.
 
+## Thread repeater bring-up (2026-07-23 — IN PROGRESS, read before touching)
+
+A second C6 (MAC `58:e6:c5:13:4a:9c`, U.FL antenna attached) runs `src/bin/repeater.rs`
+(`--features ftd`, see file header for build/flash + LED codes). It joins fine and becomes a
+Router. **Unsolved**: sensor 2 (unit-001, MAC `58:e6:c5:12:9d:80`, codes `81144479`/`152`,
+currently FACTORY-RESET/UNPAIRED at its far wall spot) has **never attached through the
+repeater** — pairing at the far spot dies at "couldn't reach device" (Thread-join phase),
+repeater's child-count LED never shows a second dip; yet sensor 2 attaches to the Nest
+instantly when near it, and the parent path worked once (the Nest itself attached as a child
+on 7/22, pre-eligibility-gating builds). Latest firmware streams all logs (incl.
+`openthread=debug` MLE internals) over UDP to the dev PC — but **zero datagrams ever arrived**
+(tcpdump-confirmed) via either sink (PC GUA direct; NAT64 `64:ff9b::` + PC IPv4): the mesh
+likely publishes no mesh→LAN unicast routes. **Next step**: plug the repeater into the PC and
+read its console **passively** (`espflash monitor --non-interactive --before no-reset-no-sync
+--after no-reset ...`) — it prints `netdata route/prefix ...` (what the mesh can route) **once,
+~3 s after attaching** (plug-in power-cycles the board, so attach the monitor immediately), then
+`tele hb sinks ok=,err=` (per-sink send results) every 10 s. That decides: fix the sink / pivot
+telemetry to SRP-TXT records / fall back to Espressif's stock router firmware on the repeater
+(plan C — fixes it repeater-side if my stack's parent path is at fault). Board quirks: this
+board re-enters the bootloader after ANY espflash contact (incl. `board-info`) until a physical
+replug; pairing attempts require power-cycling the sensor first (BLE doesn't re-advertise after
+a failure). Full history: session memory `thread-repeater` + git log 7d99e09..05eef22.
+
 ## Toolchain (on your PC — no special proxy/env needed)
 
 The ESP32-C6 is RISC-V, so this builds on **stable** Rust — no `espup`, no nightly.
