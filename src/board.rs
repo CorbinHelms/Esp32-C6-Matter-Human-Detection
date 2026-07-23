@@ -33,6 +33,50 @@ pub const LED_GPIO: u8 = 15;
 /// asymmetric patterns (solid/dip) ever expose this.
 pub const LED_ACTIVE_LOW: bool = true;
 
+// --- Antenna selection (XIAO ESP32-C6 FM8625H RF switch, internal nets) ---
+//
+// The board has an onboard ceramic antenna (hardware default) plus a U.FL
+// connector, selected by an RF switch on two GPIOs that are NOT broken out
+// on the header: GPIO3 low powers the switch, GPIO14 selects the port
+// (low = ceramic, high = U.FL). Selecting U.FL with no antenna attached
+// makes range dramatically WORSE, so this is a per-unit build-time opt-in:
+// build with EXTERNAL_ANTENNA=1 (provision.py/flash_repeater.py
+// --external-antenna, or the GUI checkbox).
+
+/// RF switch power enable (active low). Internal net, not on the header.
+pub const RF_SWITCH_EN_GPIO: u8 = 3;
+/// RF switch port select: low = onboard ceramic, high = U.FL. Internal net.
+pub const RF_SWITCH_SEL_GPIO: u8 = 14;
+
+/// Set at build time via the `EXTERNAL_ANTENNA` env var ("", "0" and
+/// "false" count as unset).
+pub const EXTERNAL_ANTENNA: bool = env_flag(option_env!("EXTERNAL_ANTENNA"));
+
+const fn env_flag(v: Option<&str>) -> bool {
+    match v {
+        None => false,
+        Some(s) => !matches!(s.as_bytes(), b"" | b"0" | b"false"),
+    }
+}
+
+/// Apply the build-time antenna selection. Call once at boot, before radio
+/// bring-up. With `EXTERNAL_ANTENNA` unset this touches nothing and the
+/// hardware default (ceramic antenna) stays in effect.
+pub fn select_antenna(
+    rf_switch_en: esp_hal::peripherals::GPIO3<'static>,
+    rf_switch_sel: esp_hal::peripherals::GPIO14<'static>,
+) {
+    use esp_hal::gpio::{Level, Output, OutputConfig};
+
+    if EXTERNAL_ANTENNA {
+        // `Output` has no Drop impl, so the pin configuration persists after
+        // these bindings go out of scope.
+        Output::new(rf_switch_en, Level::Low, OutputConfig::default());
+        Output::new(rf_switch_sel, Level::High, OutputConfig::default());
+        log::info!("antenna: external (U.FL) selected");
+    }
+}
+
 // --- 24GHz mmWave sensor (HLK-LD2410), on a dedicated UART (NOT UART0) ---
 //
 // The Seeed "24GHz mmWave for XIAO" board routes its serial lines to D2/D3.

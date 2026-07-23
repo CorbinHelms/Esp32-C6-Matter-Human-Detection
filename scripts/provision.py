@@ -236,10 +236,11 @@ def render_pamphlet(unit):
 
 # ----------------------------------------------------------------- build/flash
 
-def build(passcode, disc):
+def build(passcode, disc, external_antenna=False):
     env = dict(os.environ,
                MATTER_PASSCODE=str(passcode),
-               MATTER_DISCRIMINATOR=str(disc))
+               MATTER_DISCRIMINATOR=str(disc),
+               EXTERNAL_ANTENNA="1" if external_antenna else "")
     subprocess.run(["cargo", "build", "--release"], cwd=REPO, env=env,
                    check=True)
 
@@ -263,6 +264,10 @@ def main():
                     help="skip cargo build (use the existing ELF)")
     ap.add_argument("--regen", type=int, metavar="UNIT",
                     help="re-render an existing unit's pamphlet and exit")
+    ap.add_argument("--external-antenna", action="store_true",
+                    help="build for a unit with a U.FL antenna attached "
+                         "(selects the external antenna port at boot; do NOT "
+                         "use without an antenna — range gets much worse)")
     args = ap.parse_args()
 
     self_test()
@@ -291,13 +296,15 @@ def main():
         "discriminator": disc,
         "manual_code": manual_pairing_code(passcode, disc),
         "qr": qr_payload(passcode, disc),
+        "external_antenna": args.external_antenna,
     }
 
-    print("== unit %03d: passcode %d, discriminator %d" %
-          (unit_no, passcode, disc))
+    print("== unit %03d: passcode %d, discriminator %d%s" %
+          (unit_no, passcode, disc,
+           ", external antenna" if args.external_antenna else ""))
     if not args.no_build:
         print("== building firmware with baked codes ...")
-        build(passcode, disc)
+        build(passcode, disc, args.external_antenna)
     if not args.no_flash:
         print("== flashing %s ..." % args.port)
         flash(args.port)

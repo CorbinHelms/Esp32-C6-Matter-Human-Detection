@@ -222,6 +222,9 @@ Wifi Pro, or Google TV Streamer 4K).
   to the test values (`20202021`/`3840`) but are overridable at build time via `MATTER_PASSCODE` /
   `MATTER_DISCRIMINATOR` env vars — `scripts/provision.py` uses that to flash per-unit codes and
   generate a per-unit pamphlet (`hardware/units/`). **Dev-only** (no OTA, not shippable).
+- `EXTERNAL_ANTENNA=1` at build time switches the XIAO's RF switch to the U.FL connector at boot
+  (`board::select_antenna`, GPIO3/GPIO14) — per-unit opt-in for boards with an antenna attached
+  (`--external-antenna` on provision.py / flash_repeater.py, or the GUI checkbox).
 - Tuning knobs: `HOLD_MS` (`src/sensor.rs`), `HEAP_SIZE` (`src/bin/main.rs`), `BUMP_SIZE`
   (`src/matter/mod.rs`), `partitions.csv` (5 MB app + 256 KB NVS).
 - `rs-matter-embassy` is git-pinned in `Cargo.toml` to rev `efef8b70b64178a8f8d1460d02ebb6fa146d2d95`

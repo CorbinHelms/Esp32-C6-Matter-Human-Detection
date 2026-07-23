@@ -65,6 +65,9 @@ class App:
         self.dry = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="Dry run (no flash)",
                         variable=self.dry).pack(side="left", padx=10)
+        self.ant = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="External antenna (U.FL)",
+                        variable=self.ant).pack(side="left")
 
         btnrow = ttk.Frame(root)
         btnrow.pack(fill="x", padx=10, pady=(2, 4))
@@ -212,6 +215,8 @@ class App:
 
     def provision(self):
         args = [sys.executable, PROVISION]
+        if self.ant.get():
+            args.append("--external-antenna")
         if self.dry.get():
             args.append("--no-flash")
         elif not self.port.get():
@@ -229,6 +234,8 @@ class App:
 
     def flash_repeater(self):
         args = [sys.executable, FLASH_REPEATER]
+        if self.ant.get():
+            args.append("--external-antenna")
         if self.dry.get():
             args.append("--no-flash")
         elif not self.port.get():
@@ -294,6 +301,12 @@ def main():
     root = tk.Tk()
     try:
         ttk.Style().theme_use("clam")
+    except tk.TclError:
+        pass
+    try:
+        icon = tk.PhotoImage(
+            file=os.path.join(REPO, "scripts", "provision-icon.png"))
+        root.iconphoto(True, icon)
     except tk.TclError:
         pass
     App(root)

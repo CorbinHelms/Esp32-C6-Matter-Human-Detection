@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#134e4a"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#bg)"/>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="none"
+        stroke="#2dd4bf" stroke-opacity="0.35" stroke-width="2"/>
+  <!-- radar arcs from the sensor dot -->
+  <g fill="none" stroke="#2dd4bf" stroke-linecap="round">
+    <path d="M 52 76 A 24 24 0 0 1 76 52" stroke-width="7" opacity="0.95"/>
+    <path d="M 42 86 A 38 38 0 0 1 86 42" stroke-width="7" opacity="0.65"/>
+    <path d="M 32 96 A 52 52 0 0 1 96 32" stroke-width="7" opacity="0.4"/>
+  </g>
+  <circle cx="41" cy="87" r="9" fill="#f8fafc"/>
+  <!-- presence figure: head + shoulders in the beam -->
+  <circle cx="88" cy="88" r="8" fill="#fbbf24"/>
+  <path d="M 74 106 a 14 10 0 0 1 28 0 z" fill="#fbbf24"/>
+</svg>

@@ -84,6 +84,17 @@ extender (`scripts/flash_repeater.py`, needs `.bringup/dataset.hex`): no
 codes or pamphlet — plug it into USB power halfway to an out-of-range
 sensor and its LED goes solid once it's routing.
 
+The **External antenna (U.FL)** checkbox (both flows; CLI flag
+`--external-antenna`) builds firmware that switches the XIAO's RF switch to
+the U.FL connector at boot (GPIO3 low + GPIO14 high, see `src/board.rs`).
+Tick it **only for boards that physically have a 2.4 GHz U.FL antenna
+snapped on** — selecting the external port with nothing attached makes
+range far worse, not better.
+
+A desktop launcher ("Sensor Provisioning", teal radar icon) is installed at
+`~/.local/share/applications/sensor-provisioning.desktop` pointing at
+`scripts/provision_gui.py` with `scripts/provision-icon.png`.
+
 That generates spec-valid random codes, builds the firmware with them baked
 in (`MATTER_PASSCODE` / `MATTER_DISCRIMINATOR` env vars, see
 `src/matter/mod.rs`), flashes over `/dev/ttyACM0` (`--port` to change),

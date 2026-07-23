@@ -43,8 +43,9 @@ def read_dataset(path):
     return hexstr
 
 
-def build(dataset_hex):
-    env = dict(os.environ, THREAD_DATASET_HEX=dataset_hex)
+def build(dataset_hex, external_antenna=False):
+    env = dict(os.environ, THREAD_DATASET_HEX=dataset_hex,
+               EXTERNAL_ANTENNA="1" if external_antenna else "")
     subprocess.run(
         ["cargo", "build", "--release", "--features", "ftd",
          "--bin", "repeater"],
@@ -66,12 +67,16 @@ def main():
                          "(default: .bringup/dataset.hex)")
     ap.add_argument("--no-flash", action="store_true",
                     help="build only, skip espflash")
+    ap.add_argument("--external-antenna", action="store_true",
+                    help="build for a board with a U.FL antenna attached "
+                         "(do NOT use without one — range gets much worse)")
     args = ap.parse_args()
 
     dataset_hex = read_dataset(args.dataset)
     print(f"==> building repeater (dataset: {args.dataset}, "
-          f"{len(dataset_hex) // 2} bytes)")
-    build(dataset_hex)
+          f"{len(dataset_hex) // 2} bytes"
+          + (", external antenna" if args.external_antenna else "") + ")")
+    build(dataset_hex, args.external_antenna)
 
     if args.no_flash:
         print("==> dry run: skipped flashing; ELF at", ELF)

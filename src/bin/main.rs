@@ -53,6 +53,7 @@ async fn main(spawner: Spawner) -> ! {
     heap_allocator!(#[ram(reclaimed)] size: RECLAIMED_RAM);
 
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    board::select_antenna(peripherals.GPIO3, peripherals.GPIO14);
 
     // Start the esp-rtos scheduler that backs the embassy executor.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
