@@ -45,9 +45,11 @@ use esp_metadata_generated::memory_range;
 use log::{info, warn};
 use tinyrlibc as _;
 
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use esp32c6_matter_human_detection::board::{self, led_set};
 use openthread::esp::{EspRadio, Ieee802154};
-use openthread::{DeviceRole, OpenThread, OtResources, SimpleRamSettings};
+use openthread::{DeviceRole, OpenThread, OtResources, OtUdpResources, SimpleRamSettings, UdpSocket};
 
 extern crate alloc;
 
@@ -65,13 +67,61 @@ macro_rules! mk_static {
 /// Injected at build time so the (sensitive) network key never enters git.
 const DATASET_HEX: Option<&str> = option_env!("THREAD_DATASET_HEX");
 
+/// Optional remote log sink: an IPv6 address (typically the dev PC's global
+/// address) that receives every log line — including OpenThread's internal
+/// debug stream — as UDP datagrams on port 9999, routed out through the
+/// border router. Gives full radio-stack visibility while the repeater sits
+/// deployed at a wall, no serial cable involved.
+const TELEMETRY_DEST: Option<&str> = option_env!("TELEMETRY_DEST");
+const TELEMETRY_PORT: u16 = 9999;
+
+/// Log lines waiting for the UDP telemetry task (drop-on-full).
+static TELEMETRY: Channel<CriticalSectionRawMutex, heapless::String<160>, 64> = Channel::new();
+
+/// Global logger: mirrors everything to the USB console and queues it for
+/// UDP telemetry. OpenThread's own debug stream (target "openthread…") is
+/// enabled; everything else logs at info.
+///
+/// Feedback guard: sending telemetry makes OpenThread log its own UDP/IP6
+/// transmissions, which would re-enter the queue and self-amplify forever —
+/// any line mentioning the telemetry port/socket is dropped from the queue
+/// (still printed to the console).
+struct TeleLogger;
+static TELE_LOGGER: TeleLogger = TeleLogger;
+
+impl log::Log for TeleLogger {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        if m.target().starts_with("openthread") {
+            m.level() <= log::Level::Debug
+        } else {
+            m.level() <= log::Level::Info
+        }
+    }
+
+    fn log(&self, r: &log::Record) {
+        if !self.enabled(r.metadata()) {
+            return;
+        }
+        esp_println::println!("{} - {}", r.level(), r.args());
+        let mut s = heapless::String::<160>::new();
+        let _ = core::fmt::write(&mut s, format_args!("{}", r.args())); // truncates
+        if s.contains(":9999") || s.contains("12424") {
+            return;
+        }
+        let _ = TELEMETRY.try_send(s);
+    }
+
+    fn flush(&self) {}
+}
+
 const HEAP_SIZE: usize = 128 * 1024;
 const RECLAIMED_RAM: usize =
     memory_range!("DRAM2_UNINIT").end - memory_range!("DRAM2_UNINIT").start;
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
+    log::set_logger(&TELE_LOGGER).unwrap();
+    log::set_max_level(log::LevelFilter::Debug);
 
     heap_allocator!(size: HEAP_SIZE - RECLAIMED_RAM);
     heap_allocator!(#[ram(reclaimed)] size: RECLAIMED_RAM);
@@ -104,7 +154,9 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let mut settings = SimpleRamSettings::new(&mut settings_buf);
 
     let resources = mk_static!(OtResources, OtResources::new());
-    let ot = OpenThread::new(eui64, &mut rng, &mut settings, resources).unwrap();
+    let udp_resources = mk_static!(OtUdpResources<2, 1024>, OtUdpResources::new());
+    let ot =
+        OpenThread::new_with_udp(eui64, &mut rng, &mut settings, resources, udp_resources).unwrap();
 
     let radio = EspRadio::new(Ieee802154::new(peripherals.IEEE802154));
 
@@ -126,11 +178,66 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let mut runner = core::pin::pin!(ot.run(radio));
     let mut status = core::pin::pin!(status(ot.clone(), led));
     let mut diag = core::pin::pin!(dump_radio_diag());
+    let mut tele = core::pin::pin!(telemetry(ot.clone()));
 
-    match embassy_futures::select::select3(&mut runner, &mut status, &mut diag).await {
-        embassy_futures::select::Either3::First(_)
-        | embassy_futures::select::Either3::Second(_)
-        | embassy_futures::select::Either3::Third(_) => unreachable!(),
+    match embassy_futures::select::select4(&mut runner, &mut status, &mut diag, &mut tele).await {
+        embassy_futures::select::Either4::First(_)
+        | embassy_futures::select::Either4::Second(_)
+        | embassy_futures::select::Either4::Third(_)
+        | embassy_futures::select::Either4::Fourth(_) => unreachable!(),
+    }
+}
+
+/// Streams queued log lines to `TELEMETRY_DEST` as UDP datagrams, batched a
+/// few lines per packet (batching also keeps the OT-logs-about-telemetry
+/// amplification ratio below 1, alongside the logger's content filter).
+async fn telemetry(ot: OpenThread<'_>) -> ! {
+    let Some(dest) = TELEMETRY_DEST else {
+        loop {
+            Timer::after(Duration::from_secs(3600)).await;
+        }
+    };
+    let Ok(dest_ip) = dest.parse::<core::net::Ipv6Addr>() else {
+        esp_println::println!("telemetry: bad TELEMETRY_DEST {dest}");
+        loop {
+            Timer::after(Duration::from_secs(3600)).await;
+        }
+    };
+    let dest = core::net::SocketAddrV6::new(dest_ip, TELEMETRY_PORT, 0, 0);
+
+    loop {
+        if ot.net_status().role.is_connected() {
+            break;
+        }
+        ot.wait_changed().await;
+    }
+    Timer::after(Duration::from_secs(3)).await;
+
+    let local = core::net::SocketAddrV6::new(core::net::Ipv6Addr::UNSPECIFIED, 12424, 0, 0);
+    let sock = loop {
+        match UdpSocket::bind(ot.clone(), &local) {
+            Ok(s) => break s,
+            Err(_) => Timer::after(Duration::from_secs(5)).await,
+        }
+    };
+    info!("telemetry: streaming to [{dest_ip}]:{TELEMETRY_PORT}");
+
+    let mut batch = heapless::String::<1400>::new();
+    loop {
+        batch.clear();
+        let first = TELEMETRY.receive().await;
+        let _ = batch.push_str(first.as_str());
+        for _ in 0..7 {
+            let Ok(next) = TELEMETRY.try_receive() else {
+                break;
+            };
+            if batch.len() + next.len() + 1 > batch.capacity() {
+                break;
+            }
+            let _ = batch.push('\n');
+            let _ = batch.push_str(next.as_str());
+        }
+        let _ = sock.send(batch.as_bytes(), None, &dest).await;
     }
 }
 
