@@ -126,28 +126,40 @@ stale/offline entry of the device from Google Home first, and **don't cancel the
 - espflash monitor is kept running via nohup writing to a log; grep that file rather than
   attaching interactively.
 
-## Thread repeater bring-up (2026-07-23 — IN PROGRESS, read before touching)
+## Thread repeater bring-up (2026-07-23 — RADIO ROOT CAUSES FIXED, field test pending)
 
 A second C6 (MAC `58:e6:c5:13:4a:9c`, U.FL antenna attached) runs `src/bin/repeater.rs`
-(`--features ftd`, see file header for build/flash + LED codes). It joins fine and becomes a
-Router. **Unsolved**: sensor 2 (unit-001, MAC `58:e6:c5:12:9d:80`, codes `81144479`/`152`,
-currently FACTORY-RESET/UNPAIRED at its far wall spot) has **never attached through the
-repeater** — pairing at the far spot dies at "couldn't reach device" (Thread-join phase),
-repeater's child-count LED never shows a second dip; yet sensor 2 attaches to the Nest
-instantly when near it, and the parent path worked once (the Nest itself attached as a child
-on 7/22, pre-eligibility-gating builds). Latest firmware streams all logs (incl.
-`openthread=debug` MLE internals) over UDP to the dev PC — but **zero datagrams ever arrived**
-(tcpdump-confirmed) via either sink (PC GUA direct; NAT64 `64:ff9b::` + PC IPv4): the mesh
-likely publishes no mesh→LAN unicast routes. **Next step**: plug the repeater into the PC and
-read its console **passively** (`espflash monitor --non-interactive --before no-reset-no-sync
---after no-reset ...`) — it prints `netdata route/prefix ...` (what the mesh can route) **once,
-~3 s after attaching** (plug-in power-cycles the board, so attach the monitor immediately), then
-`tele hb sinks ok=,err=` (per-sink send results) every 10 s. That decides: fix the sink / pivot
-telemetry to SRP-TXT records / fall back to Espressif's stock router firmware on the repeater
-(plan C — fixes it repeater-side if my stack's parent path is at fault). Board quirks: this
-board re-enters the bootloader after ANY espflash contact (incl. `board-info`) until a physical
-replug; pairing attempts require power-cycling the sensor first (BLE doesn't re-advertise after
-a failure). Full history: session memory `thread-repeater` + git log 7d99e09..05eef22.
+(`--features ftd`, see file header for build/flash + LED codes). The long "sensor 2 never
+attaches through it / repeater-as-Router forwards nothing" saga ended 2026-07-23 evening with
+**two stacked vendored-stack bugs that zeroed every link margin OpenThread ever computed**
+(commit 861fc62, found via the telemetry v3 remote stream, commit 1194847):
+1. EspRadio glue read per-frame **RSSI one byte past the frame** (fixed-size buffer, guard
+   always passed) → garbage RSS (0/-38/-113). Real slot: first FCS byte, `data[1..][len-2]`.
+2. `otPlatRadioGetReceiveSensitivity` was a **TODO returning 0 dBm** → margin = RSS − 0 < 0 →
+   LinkQualityIn 0 for every neighbor. Now −104 dBm (C6 datasheet).
+Either alone pins lq_in at 0: router↔router links sit at cost ∞ (`nbr{lq[i/o]:0/3 cost:16}`),
+so the moment the repeater was promoted to Router, MeshForwarder dropped every off-link
+unicast with `NoRoute` — a Router-shaped black hole. Children were unaffected (they only send
+to their parent), which is why sensors worked as children and everything died at promotion.
+Bench-verified post-fix: `lq[i/o]:3/3 cost:1` to the Nest, multi-hop routes appear, 63
+sends/0 drops as Router, telemetry streams continuously.
+
+Telemetry (v3, working): sinks are discovered at runtime — the Nest publishes its OWN NAT64
+/96 (`fd6b:588a:7d6a:2::/96`, NOT well-known `64:ff9b::`), so the PC sink is that prefix +
+PC IPv4; sinks not covered by a published route are disabled (send() reports Ok even for
+frames forwarding later drops). All MeshForwarder/route-error lines are console-only (queue
+feedback at ratio 1.0 melted v2); >300 batches/10 s trips a breaker. Listen with a UDP :9999
+socket; heartbeat `tele hb sinks ok=,err=` every 10 s.
+
+**Next step (field test):** reflash sensor 2 (unit-001, MAC `58:e6:c5:12:9d:80`, codes
+preserved via `MATTER_PASSCODE=81144479 MATTER_DISCRIMINATOR=152`) with the fixed stack —
+its parent selection currently runs on the same zeroed margins — then repeater back to its
+wall outlet, sensor 2 to the far spot, power-cycle sensor, pair in Google Home (don't cancel
+<5 min). Repeater telemetry lets you watch the MLE attach remotely. Board quirks: the
+repeater board often (not always) parks in the ROM bootloader after espflash contact until a
+physical replug; pairing attempts require power-cycling the sensor first (BLE doesn't
+re-advertise after a failure). Full history: session memory `thread-repeater` + git log
+7d99e09..1194847.
 
 ## Toolchain (on your PC — no special proxy/env needed)
 
