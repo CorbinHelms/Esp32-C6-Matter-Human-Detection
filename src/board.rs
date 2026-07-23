@@ -27,6 +27,12 @@
 /// User/builtin LED on the XIAO ESP32-C6.
 pub const LED_GPIO: u8 = 15;
 
+/// The user LED is **active-low**: drive GPIO15 LOW to light it (Seeed wiki;
+/// also confirmed on hardware — a solid-ON pattern driven active-high showed
+/// as dark-with-blips). A symmetric blink hides the inversion, so only
+/// asymmetric patterns (solid/dip) ever expose this.
+pub const LED_ACTIVE_LOW: bool = true;
+
 // --- 24GHz mmWave sensor (HLK-LD2410), on a dedicated UART (NOT UART0) ---
 //
 // The Seeed "24GHz mmWave for XIAO" board routes its serial lines to D2/D3.

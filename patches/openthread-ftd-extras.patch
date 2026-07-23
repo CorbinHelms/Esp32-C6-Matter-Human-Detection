@@ -5,11 +5,11 @@
      OT_RADIO_FRAME_MAX_SIZE,
  };
 +#[cfg(feature = "ftd")]
-+use sys::otThreadBecomeRouter;
++use sys::{otChildInfo, otThreadBecomeRouter, otThreadGetChildInfoByIndex, otThreadGetMaxAllowedChildren};
  
  /// A newtype wrapper over the native OpenThread error type (`otError`).
  ///
-@@ -473,6 +475,21 @@
+@@ -473,6 +475,41 @@
          ot!(unsafe { otThreadSetLinkMode(state.ot.instance, mode) })
      }
  
@@ -26,6 +26,26 @@
 +        let state = ot.state();
 +
 +        ot!(unsafe { otThreadBecomeRouter(state.ot.instance) })
++    }
++
++    /// Return the number of children currently attached to this device
++    /// (FTD only; meaningful while in the Router/Leader role).
++    #[cfg(feature = "ftd")]
++    pub fn child_count(&self) -> u16 {
++        let mut ot = self.activate();
++        let state = ot.state();
++
++        let max = unsafe { otThreadGetMaxAllowedChildren(state.ot.instance) };
++        let mut count = 0;
++        for i in 0..max {
++            let mut info = core::mem::MaybeUninit::<otChildInfo>::uninit();
++            if unsafe { otThreadGetChildInfoByIndex(state.ot.instance, i, info.as_mut_ptr()) }
++                == otError_OT_ERROR_NONE
++            {
++                count += 1;
++            }
++        }
++        count
 +    }
 +
      /// Gets the list of IPv6 addresses currently assigned to the Thread interface

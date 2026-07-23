@@ -37,6 +37,7 @@ use esp_metadata_generated::memory_range;
 use log::{info, warn};
 use tinyrlibc as _;
 
+use esp32c6_matter_human_detection::board;
 use openthread::esp::{EspRadio, Ieee802154};
 use openthread::{DeviceRole, OpenThread, OtResources, SimpleRamSettings};
 
@@ -105,7 +106,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     ot.enable_ipv6(true).unwrap();
     ot.enable_thread(true).unwrap();
 
-    let led = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
+    let led_off = if board::LED_ACTIVE_LOW { Level::High } else { Level::Low };
+    let led = Output::new(peripherals.GPIO15, led_off, OutputConfig::default());
 
     let mut runner = core::pin::pin!(ot.run(radio));
     let mut status = core::pin::pin!(status(ot.clone(), led));
@@ -126,6 +128,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
     let mut last_role = None;
     let mut child_secs = 0u32;
+    let mut last_children = 0u16;
     loop {
         let role = ot.net_status().role;
         if last_role != Some(role) {
@@ -144,33 +147,49 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
         match role {
             DeviceRole::Router | DeviceRole::Leader => {
                 child_secs = 0;
-                led.set_high();
+                // Devices attaching *through us* show up here — the proof the
+                // far sensor is actually using the repeater.
+                let children = ot.child_count();
+                if children != last_children {
+                    info!("repeater: attached children -> {children}");
+                    last_children = children;
+                }
+                led_set(&mut led, true);
                 Timer::after(Duration::from_millis(2900)).await;
-                led.set_low();
+                led_set(&mut led, false);
                 Timer::after(Duration::from_millis(100)).await;
             }
             DeviceRole::Child => {
                 child_secs += 1;
+                last_children = 0;
                 if child_secs % 30 == 10 {
                     match ot.become_router() {
                         Ok(()) => info!("repeater: soliciting router role"),
                         Err(e) => warn!("repeater: router solicit failed: {e:?}"),
                     }
                 }
-                led.set_high();
+                led_set(&mut led, true);
                 Timer::after(Duration::from_millis(500)).await;
-                led.set_low();
+                led_set(&mut led, false);
                 Timer::after(Duration::from_millis(500)).await;
             }
             _ => {
                 child_secs = 0;
-                led.set_high();
+                last_children = 0;
+                led_set(&mut led, true);
                 Timer::after(Duration::from_millis(120)).await;
-                led.set_low();
+                led_set(&mut led, false);
                 Timer::after(Duration::from_millis(120)).await;
             }
         }
     }
+}
+
+/// Drive the user LED, honoring the board's active-low wiring
+/// (`board::LED_ACTIVE_LOW`): `on = true` means *visibly lit*.
+fn led_set(led: &mut Output<'_>, on: bool) {
+    let high = on != board::LED_ACTIVE_LOW;
+    led.set_level(if high { Level::High } else { Level::Low });
 }
 
 fn decode_hex<'a>(hex: &str, out: &'a mut [u8]) -> &'a [u8] {
