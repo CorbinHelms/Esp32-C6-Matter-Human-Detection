@@ -7,12 +7,12 @@
 +#[cfg(feature = "ftd")]
 +use sys::{
 +    otChildInfo, otThreadBecomeRouter, otThreadGetChildInfoByIndex, otThreadGetMaxAllowedChildren,
-+    otThreadIsSingleton,
++    otThreadIsSingleton, otThreadSetRouterEligible,
 +};
  
  /// A newtype wrapper over the native OpenThread error type (`otError`).
  ///
-@@ -473,6 +478,52 @@
+@@ -473,6 +478,65 @@
          ot!(unsafe { otThreadSetLinkMode(state.ot.instance, mode) })
      }
  
@@ -29,6 +29,19 @@
 +        let state = ot.state();
 +
 +        ot!(unsafe { otThreadBecomeRouter(state.ot.instance) })
++    }
++
++    /// Enable/disable eligibility for the Router/Leader roles (FTD only).
++    ///
++    /// While ineligible the device can only ever attach as a child: a failed
++    /// attach keeps searching instead of forming a new partition. Flip to
++    /// `true` after attaching to make the device promotable.
++    #[cfg(feature = "ftd")]
++    pub fn set_router_eligible(&self, eligible: bool) -> Result<(), OtError> {
++        let mut ot = self.activate();
++        let state = ot.state();
++
++        ot!(unsafe { otThreadSetRouterEligible(state.ot.instance, eligible) })
 +    }
 +
 +    /// Return `true` if this device is the only router/leader in its partition

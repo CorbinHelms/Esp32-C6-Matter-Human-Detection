@@ -23,14 +23,15 @@
 //! ```
 //!
 //! LED (GPIO15) shows the role at a glance:
-//! - fast blink: detached / joining
+//! - fast blink: searching — cannot find/join the network from here (out of
+//!   range or 2.4 GHz interference; USB-3 ports and busy WiFi are classic).
+//!   The device stays child-only while searching, so it can never fracture
+//!   the home network by forming a partition of its own.
 //! - slow blink: attached as child (not yet routing)
 //! - solid with a short dip every 3 s: Router (or Leader of a shared
 //!   partition) — meshed and repeating traffic
-//! - double-flash then pause: Leader of a **singleton** partition — it could
-//!   not join the existing network and formed its own; nothing is being
-//!   repeated. Usually 2.4 GHz interference at that outlet (USB-3 ports and
-//!   busy WiFi are classic) or genuinely out of range — try another spot.
+//! - double-flash then pause: Leader of a **singleton** partition (should no
+//!   longer happen with the eligibility gating; kept as a safety net)
 
 use embassy_time::{Duration, Timer};
 use esp_alloc::heap_allocator;
@@ -104,9 +105,14 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let radio = EspRadio::new(Ieee802154::new(peripherals.IEEE802154));
 
-    // Full Thread Device, receiver always on, full network data — i.e.
-    // router-eligible. The leader upgrades us from REED to Router on demand.
+    // Full Thread Device, receiver always on, full network data.
     ot.set_link_mode(true, true, true).unwrap();
+    // Never form our own partition: stay ineligible for Router/Leader until
+    // we have actually attached as a child of the existing network (status()
+    // flips it). A repeater that can't join must keep searching — a stray
+    // partition from a half-jammed radio pulls real routers away from the
+    // home network (observed: the border router migrated to ours once).
+    ot.set_router_eligible(false).unwrap();
     ot.set_active_dataset_tlv(dataset).unwrap();
     ot.enable_ipv6(true).unwrap();
     ot.enable_thread(true).unwrap();
@@ -195,6 +201,21 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
         }
         if last_role != Some(role) {
             info!("repeater: role -> {role:?}");
+            match role {
+                // Attached: now it's safe to be promotable — promotion can
+                // only mean joining the existing partition's router set.
+                DeviceRole::Child => {
+                    if ot.set_router_eligible(true).is_ok() {
+                        info!("repeater: attached, router eligibility enabled");
+                    }
+                }
+                // Lost the network: back to child-only so a jammed/isolated
+                // radio can't spin up a partition of its own.
+                DeviceRole::Detached | DeviceRole::Disabled => {
+                    let _ = ot.set_router_eligible(false);
+                }
+                _ => {}
+            }
             if role.is_connected() && !matches!(last_role, Some(r) if r.is_connected()) {
                 let _ = ot.ipv6_addrs(|addr| {
                     if let Some((addr, prefix)) = addr {

@@ -106,6 +106,11 @@ Adds two `ftd`-gated methods for the repeater firmware:
 - `OpenThread::child_count()` (`otThreadGetChildInfoByIndex`) — count attached
   children, i.e. proof that a far sensor is actually attaching through the
   repeater.
+- `OpenThread::set_router_eligible()` (`otThreadSetRouterEligible`) — the
+  repeater stays child-only until attached, so a jammed radio keeps searching
+  instead of forming a stray partition that pulls real routers off the home
+  network (observed once: the border router migrated into the repeater's
+  singleton partition).
 - `OpenThread::is_singleton()` (`otThreadIsSingleton`) — a Leader that stays
   singleton formed its own partition instead of joining the network (seen when
   CCA-busy TX aborts killed the join handshake); the repeater LED shows this
