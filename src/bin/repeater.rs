@@ -25,7 +25,12 @@
 //! LED (GPIO15) shows the role at a glance:
 //! - fast blink: detached / joining
 //! - slow blink: attached as child (not yet routing)
-//! - solid with a short dip every 3 s: Router/Leader — repeating traffic
+//! - solid with a short dip every 3 s: Router (or Leader of a shared
+//!   partition) — meshed and repeating traffic
+//! - double-flash then pause: Leader of a **singleton** partition — it could
+//!   not join the existing network and formed its own; nothing is being
+//!   repeated. Usually 2.4 GHz interference at that outlet (USB-3 ports and
+//!   busy WiFi are classic) or genuinely out of range — try another spot.
 
 use embassy_time::{Duration, Timer};
 use esp_alloc::heap_allocator;
@@ -111,11 +116,52 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut runner = core::pin::pin!(ot.run(radio));
     let mut status = core::pin::pin!(status(ot.clone(), led));
+    let mut diag = core::pin::pin!(dump_radio_diag());
 
-    match embassy_futures::select::select(&mut runner, &mut status).await {
-        embassy_futures::select::Either::First(_) | embassy_futures::select::Either::Second(_) => {
-            unreachable!()
-        }
+    match embassy_futures::select::select3(&mut runner, &mut status, &mut diag).await {
+        embassy_futures::select::Either3::First(_)
+        | embassy_futures::select::Either3::Second(_)
+        | embassy_futures::select::Either3::Third(_) => unreachable!(),
+    }
+}
+
+/// Prints the vendored esp-radio ISR counters every 15 s (deltas since the
+/// previous line) — same x-ray as srp-probe, so a bench session shows the
+/// radio-level fate of every frame (e.g. CCA-busy TX aborts under
+/// interference) without logging from the ISR.
+async fn dump_radio_diag() -> ! {
+    let mut prev: ([u32; 12], [u32; 32], [u32; 16]) = Default::default();
+    loop {
+        Timer::after(Duration::from_secs(15)).await;
+        let cur = esp_radio::ieee802154::diag::snapshot();
+        let d: heapless::String<256> = {
+            let mut s = heapless::String::new();
+            let n = &cur.0;
+            let p = &prev.0;
+            let _ = core::fmt::write(
+                &mut s,
+                format_args!(
+                    "sfd {} rxevt {} rxq {} qfull {} ack_imm {} ack_enh {} noack {} acktx {} txdone {} ackrx {} ackto {} rearm {} | rxab",
+                    n[0] - p[0], n[11] - p[11], n[1] - p[1], n[2] - p[2], n[3] - p[3], n[4] - p[4],
+                    n[5] - p[5], n[6] - p[6], n[7] - p[7], n[8] - p[8], n[9] - p[9],
+                    n[10] - p[10],
+                ),
+            );
+            for (i, (c, pc)) in cur.1.iter().zip(prev.1.iter()).enumerate() {
+                if c - pc > 0 {
+                    let _ = core::fmt::write(&mut s, format_args!(" {}:{}", i, c - pc));
+                }
+            }
+            let _ = core::fmt::write(&mut s, format_args!(" | txab"));
+            for (i, (c, pc)) in cur.2.iter().zip(prev.2.iter()).enumerate() {
+                if c - pc > 0 {
+                    let _ = core::fmt::write(&mut s, format_args!(" {}:{}", i, c - pc));
+                }
+            }
+            s
+        };
+        info!("RADIO DIAG {}", d.as_str());
+        prev = cur;
     }
 }
 
@@ -129,8 +175,24 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
     let mut last_role = None;
     let mut child_secs = 0u32;
     let mut last_children = 0u16;
+    let mut last_lonely = false;
     loop {
         let role = ot.net_status().role;
+        // A Leader that stays singleton didn't join anything — it gave up and
+        // formed its own partition. Treat that as "not working".
+        let lonely = role == DeviceRole::Leader && ot.is_singleton();
+        if lonely != last_lonely {
+            if lonely {
+                warn!(
+                    "repeater: became leader of a SINGLETON partition — the join \
+                     handshake with the existing network is failing (interference \
+                     or out of range); nothing is being repeated"
+                );
+            } else {
+                info!("repeater: partition is shared now (no longer singleton)");
+            }
+            last_lonely = lonely;
+        }
         if last_role != Some(role) {
             info!("repeater: role -> {role:?}");
             if role.is_connected() && !matches!(last_role, Some(r) if r.is_connected()) {
@@ -145,6 +207,18 @@ async fn status(ot: OpenThread<'_>, mut led: Output<'static>) -> ! {
         }
 
         match role {
+            DeviceRole::Leader if lonely => {
+                child_secs = 0;
+                last_children = 0;
+                // Double-flash + long pause: "radio is fine, but I'm alone".
+                for _ in 0..2 {
+                    led_set(&mut led, true);
+                    Timer::after(Duration::from_millis(120)).await;
+                    led_set(&mut led, false);
+                    Timer::after(Duration::from_millis(120)).await;
+                }
+                Timer::after(Duration::from_millis(1520)).await;
+            }
             DeviceRole::Router | DeviceRole::Leader => {
                 child_secs = 0;
                 // Devices attaching *through us* show up here — the proof the

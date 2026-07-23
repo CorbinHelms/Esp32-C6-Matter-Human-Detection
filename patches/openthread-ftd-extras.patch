@@ -1,15 +1,18 @@
 --- a/openthread/src/lib.rs
 +++ b/openthread/src/lib.rs
-@@ -86,6 +86,8 @@
+@@ -86,6 +86,11 @@
      otThreadSetLinkMode, OT_CHANGED_THREAD_ROLE, OT_RADIO_CAPS_ACK_TIMEOUT,
      OT_RADIO_FRAME_MAX_SIZE,
  };
 +#[cfg(feature = "ftd")]
-+use sys::{otChildInfo, otThreadBecomeRouter, otThreadGetChildInfoByIndex, otThreadGetMaxAllowedChildren};
++use sys::{
++    otChildInfo, otThreadBecomeRouter, otThreadGetChildInfoByIndex, otThreadGetMaxAllowedChildren,
++    otThreadIsSingleton,
++};
  
  /// A newtype wrapper over the native OpenThread error type (`otError`).
  ///
-@@ -473,6 +475,41 @@
+@@ -473,6 +478,52 @@
          ot!(unsafe { otThreadSetLinkMode(state.ot.instance, mode) })
      }
  
@@ -26,6 +29,17 @@
 +        let state = ot.state();
 +
 +        ot!(unsafe { otThreadBecomeRouter(state.ot.instance) })
++    }
++
++    /// Return `true` if this device is the only router/leader in its partition
++    /// (FTD only). A Leader that stays singleton formed its own partition
++    /// instead of joining the intended network.
++    #[cfg(feature = "ftd")]
++    pub fn is_singleton(&self) -> bool {
++        let mut ot = self.activate();
++        let state = ot.state();
++
++        unsafe { otThreadIsSingleton(state.ot.instance) }
 +    }
 +
 +    /// Return the number of children currently attached to this device
