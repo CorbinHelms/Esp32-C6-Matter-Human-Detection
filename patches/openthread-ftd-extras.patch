@@ -12,7 +12,7 @@
  
  /// A newtype wrapper over the native OpenThread error type (`otError`).
  ///
-@@ -473,6 +478,65 @@
+@@ -473,6 +478,99 @@
          ot!(unsafe { otThreadSetLinkMode(state.ot.instance, mode) })
      }
  
@@ -29,6 +29,40 @@
 +        let state = ot.state();
 +
 +        ot!(unsafe { otThreadBecomeRouter(state.ot.instance) })
++    }
++
++    /// Iterate the partition's Network Data: every on-mesh prefix and
++    /// external route, i.e. the set of destinations the border router(s)
++    /// have made routable from inside the mesh. Diagnostic aid.
++    ///
++    /// The closure receives `(is_external_route, prefix_octets, prefix_len)`.
++    pub fn netdata_dump<F: FnMut(bool, &[u8; 16], u8)>(&self, mut f: F) {
++        use sys::{
++            otBorderRouterConfig, otExternalRouteConfig, otNetDataGetNextOnMeshPrefix,
++            otNetDataGetNextRoute, otNetworkDataIterator,
++        };
++
++        let mut ot = self.activate();
++        let state = ot.state();
++        let instance = state.ot.instance;
++
++        let mut it: otNetworkDataIterator = 0;
++        let mut cfg = core::mem::MaybeUninit::<otBorderRouterConfig>::uninit();
++        while unsafe { otNetDataGetNextOnMeshPrefix(instance, &mut it, cfg.as_mut_ptr()) }
++            == otError_OT_ERROR_NONE
++        {
++            let cfg = unsafe { cfg.assume_init_ref() };
++            f(false, unsafe { &cfg.mPrefix.mPrefix.mFields.m8 }, cfg.mPrefix.mLength);
++        }
++
++        let mut it: otNetworkDataIterator = 0;
++        let mut cfg = core::mem::MaybeUninit::<otExternalRouteConfig>::uninit();
++        while unsafe { otNetDataGetNextRoute(instance, &mut it, cfg.as_mut_ptr()) }
++            == otError_OT_ERROR_NONE
++        {
++            let cfg = unsafe { cfg.assume_init_ref() };
++            f(true, unsafe { &cfg.mPrefix.mPrefix.mFields.m8 }, cfg.mPrefix.mLength);
++        }
 +    }
 +
 +    /// Enable/disable eligibility for the Router/Leader roles (FTD only).

@@ -35,7 +35,7 @@
 //! - double-flash then pause: Leader of a **singleton** partition (should no
 //!   longer happen with the eligibility gating; kept as a safety net)
 
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use esp_alloc::heap_allocator;
 use esp_backtrace as _;
 use esp_hal::gpio::{Level, Output, OutputConfig};
@@ -73,6 +73,10 @@ const DATASET_HEX: Option<&str> = option_env!("THREAD_DATASET_HEX");
 /// border router. Gives full radio-stack visibility while the repeater sits
 /// deployed at a wall, no serial cable involved.
 const TELEMETRY_DEST: Option<&str> = option_env!("TELEMETRY_DEST");
+/// The dev PC's IPv4 (dotted quad), reached as a second sink via the border
+/// router's NAT64 (well-known prefix 64:ff9b::/96) in case the mesh has no
+/// route to the PC's global IPv6.
+const TELEMETRY_DEST_V4: Option<&str> = option_env!("TELEMETRY_DEST_V4");
 const TELEMETRY_PORT: u16 = 9999;
 
 /// Log lines waiting for the UDP telemetry task (drop-on-full).
@@ -192,18 +196,26 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 /// few lines per packet (batching also keeps the OT-logs-about-telemetry
 /// amplification ratio below 1, alongside the logger's content filter).
 async fn telemetry(ot: OpenThread<'_>) -> ! {
-    let Some(dest) = TELEMETRY_DEST else {
+    use core::net::{Ipv6Addr, SocketAddrV6};
+
+    // Sink list: the PC's global IPv6, plus the PC's IPv4 through the border
+    // router's NAT64 (well-known prefix). Either may be unroutable in a given
+    // network — every batch goes to all sinks and the heartbeat reports
+    // per-sink success/error counters so the working path is identifiable.
+    let mut sinks: heapless::Vec<SocketAddrV6, 2> = heapless::Vec::new();
+    if let Some(Ok(ip)) = TELEMETRY_DEST.map(|s| s.parse::<Ipv6Addr>()) {
+        let _ = sinks.push(SocketAddrV6::new(ip, TELEMETRY_PORT, 0, 0));
+    }
+    if let Some(Ok(v4)) = TELEMETRY_DEST_V4.map(|s| s.parse::<core::net::Ipv4Addr>()) {
+        let [a, b, c, d] = v4.octets();
+        let nat64 = Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, u16::from_be_bytes([a, b]), u16::from_be_bytes([c, d]));
+        let _ = sinks.push(SocketAddrV6::new(nat64, TELEMETRY_PORT, 0, 0));
+    }
+    if sinks.is_empty() {
         loop {
             Timer::after(Duration::from_secs(3600)).await;
         }
-    };
-    let Ok(dest_ip) = dest.parse::<core::net::Ipv6Addr>() else {
-        esp_println::println!("telemetry: bad TELEMETRY_DEST {dest}");
-        loop {
-            Timer::after(Duration::from_secs(3600)).await;
-        }
-    };
-    let dest = core::net::SocketAddrV6::new(dest_ip, TELEMETRY_PORT, 0, 0);
+    }
 
     loop {
         if ot.net_status().role.is_connected() {
@@ -213,31 +225,64 @@ async fn telemetry(ot: OpenThread<'_>) -> ! {
     }
     Timer::after(Duration::from_secs(3)).await;
 
-    let local = core::net::SocketAddrV6::new(core::net::Ipv6Addr::UNSPECIFIED, 12424, 0, 0);
+    let local = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 12424, 0, 0);
     let sock = loop {
         match UdpSocket::bind(ot.clone(), &local) {
             Ok(s) => break s,
             Err(_) => Timer::after(Duration::from_secs(5)).await,
         }
     };
-    info!("telemetry: streaming to [{dest_ip}]:{TELEMETRY_PORT}");
+    info!("telemetry: streaming to {} sink(s)", sinks.len());
 
+    // What can the mesh route to? (Answers "why doesn't a sink work".)
+    ot.netdata_dump(|is_route, octets, len| {
+        let ip = Ipv6Addr::from(*octets);
+        info!(
+            "netdata {}: {ip}/{len}",
+            if is_route { "route" } else { "prefix" }
+        );
+    });
+
+    let mut ok = [0u32; 2];
+    let mut err = [0u32; 2];
+    let mut last_hb = Instant::now();
     let mut batch = heapless::String::<1400>::new();
     loop {
-        batch.clear();
-        let first = TELEMETRY.receive().await;
-        let _ = batch.push_str(first.as_str());
-        for _ in 0..7 {
-            let Ok(next) = TELEMETRY.try_receive() else {
-                break;
-            };
-            if batch.len() + next.len() + 1 > batch.capacity() {
-                break;
+        match embassy_futures::select::select(
+            TELEMETRY.receive(),
+            Timer::at(last_hb + Duration::from_secs(10)),
+        )
+        .await
+        {
+            embassy_futures::select::Either::First(first) => {
+                batch.clear();
+                let _ = batch.push_str(first.as_str());
+                for _ in 0..7 {
+                    let Ok(next) = TELEMETRY.try_receive() else {
+                        break;
+                    };
+                    if batch.len() + next.len() + 1 > batch.capacity() {
+                        break;
+                    }
+                    let _ = batch.push('\n');
+                    let _ = batch.push_str(next.as_str());
+                }
+                for (i, dest) in sinks.iter().enumerate() {
+                    match sock.send(batch.as_bytes(), None, dest).await {
+                        Ok(()) => ok[i] += 1,
+                        Err(_) => err[i] += 1,
+                    }
+                }
             }
-            let _ = batch.push('\n');
-            let _ = batch.push_str(next.as_str());
+            embassy_futures::select::Either::Second(()) => {
+                last_hb = Instant::now();
+                // Queued via info!, rides the next batch to every sink.
+                info!(
+                    "tele hb sinks ok={},{} err={},{}",
+                    ok[0], ok[1], err[0], err[1]
+                );
+            }
         }
-        let _ = sock.send(batch.as_bytes(), None, &dest).await;
     }
 }
 
