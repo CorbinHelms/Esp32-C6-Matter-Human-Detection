@@ -151,15 +151,22 @@ frames forwarding later drops). All MeshForwarder/route-error lines are console-
 feedback at ratio 1.0 melted v2); >300 batches/10 s trips a breaker. Listen with a UDP :9999
 socket; heartbeat `tele hb sinks ok=,err=` every 10 s.
 
-**Next step (field test):** reflash sensor 2 (unit-001, MAC `58:e6:c5:12:9d:80`, codes
-preserved via `MATTER_PASSCODE=81144479 MATTER_DISCRIMINATOR=152`) with the fixed stack —
-its parent selection currently runs on the same zeroed margins — then repeater back to its
-wall outlet, sensor 2 to the far spot, power-cycle sensor, pair in Google Home (don't cancel
-<5 min). Repeater telemetry lets you watch the MLE attach remotely. Board quirks: the
-repeater board often (not always) parks in the ROM bootloader after espflash contact until a
-physical replug; pairing attempts require power-cycling the sensor first (BLE doesn't
-re-advertise after a failure). Full history: session memory `thread-repeater` + git log
-7d99e09..1194847.
+**Field test 2026-07-23 late (partial win + new core bug):** sensor 2 (unit-001, fixed
+stack, codes preserved) **commissioned successfully ~22:15** — but only after removing the
+repeater from the mesh and rebooting the hub; node_id 2373101919. It must stay near the
+Nest until the repeater is redeployed. The remaining blocker: **the repeater silently
+crash-reboots** at irregular intervals (14 s–21 min; bench AND wall; no panic output —
+watchdog/brownout/hw suspect). Each reboot fully re-inits OT (extaddr randomizes, new Nest
+child slot each cycle), and while mid-restart the radio still hardware-ACKs frames MLE never
+sees — a **child-attach black hole that wins parent selection** (margins are honest now).
+That trap + Nest child-table ghosts explains all the day's pairing failures. Diagnosis
+protocol: repeater on PC USB with `scripts/serial_capture.py` respawn-looped (plain
+stty/cat hangs forever in open() on this cdc-acm) → wait for a crash → next boot's ROM
+`rst:0x...` line names the cause. Then: fix, redeploy to wall, move sensor 2 to far spot,
+verify re-attach through repeater (LED double-dip). Board quirks: the repeater board often
+(not always) parks in the ROM bootloader after espflash contact until a physical replug;
+pairing attempts require power-cycling the sensor first (BLE doesn't re-advertise after a
+failure). Full history: session memory `thread-repeater` + git log 7d99e09..1194847.
 
 ## Toolchain (on your PC — no special proxy/env needed)
 
