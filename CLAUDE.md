@@ -151,19 +151,16 @@ frames forwarding later drops). All MeshForwarder/route-error lines are console-
 feedback at ratio 1.0 melted v2); >300 batches/10 s trips a breaker. Listen with a UDP :9999
 socket; heartbeat `tele hb sinks ok=,err=` every 10 s.
 
-**Field test 2026-07-23 late (partial win + new core bug):** sensor 2 (unit-001, fixed
-stack, codes preserved) **commissioned successfully ~22:15** — but only after removing the
-repeater from the mesh and rebooting the hub; node_id 2373101919. It must stay near the
-Nest until the repeater is redeployed. The remaining blocker: **the repeater silently
-crash-reboots** at irregular intervals (14 s–21 min; bench AND wall; no panic output —
-watchdog/brownout/hw suspect). Each reboot fully re-inits OT (extaddr randomizes, new Nest
-child slot each cycle), and while mid-restart the radio still hardware-ACKs frames MLE never
-sees — a **child-attach black hole that wins parent selection** (margins are honest now).
-That trap + Nest child-table ghosts explains all the day's pairing failures. Diagnosis
-protocol: repeater on PC USB with `scripts/serial_capture.py` respawn-looped (plain
-stty/cat hangs forever in open() on this cdc-acm) → wait for a crash → next boot's ROM
-`rst:0x...` line names the cause. Then: fix, redeploy to wall, move sensor 2 to far spot,
-verify re-attach through repeater (LED double-dip). Board quirks: the repeater board often
+**OUTCOME (2026-07-25): system fully deployed and working.** Sensor 2 sits at the far
+wall spot attached THROUGH the repeater (its first child, RLOC 0x9c01, LED double-dip) and
+is active in Google Home end-to-end; sensor 1 unchanged. The 7/23 silent crash-loop did not
+recur on the final firmware (4 h PC + wall soak, 343+ announce sweeps exercised) — believed
+a storm-era artifact, NOT fully root-caused. If the repeater ever flaps again (double-dip
+gone / sensor 2 offline): plug it into the PC and run `scripts/serial_capture.py` in a
+respawn loop (plain stty/cat hangs forever in open() on this cdc-acm) to catch the next
+boot's ROM `rst:0x...` reset reason. Google may ignore a freshly-commissioned device for
+HOURS (observed 15 h) — device-side health shows as SRP re-registrations with zero inbound
+CASE; opening the Google Home app can prod it. Board quirks: the repeater board often
 (not always) parks in the ROM bootloader after espflash contact until a physical replug;
 pairing attempts require power-cycling the sensor first (BLE doesn't re-advertise after a
 failure). Full history: session memory `thread-repeater` + git log 7d99e09..1194847.
